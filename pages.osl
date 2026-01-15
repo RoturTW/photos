@@ -1,0 +1,12 @@
+
+def homePage(*gin.Context c) (
+    username := c.MustGet("username").toStr()
+    c.HTML(200, "index.html", {
+        "Username": username,
+        "Subscription": userData[username.toLower()].subscription,
+    })
+)
+
+def authPage(*gin.Context c) (
+    c.HTML(200, "auth.html", { AuthKey: authKey })
+)

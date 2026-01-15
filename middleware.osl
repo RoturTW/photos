@@ -1,0 +1,24 @@
+
+def abortUnauthorized(*gin.Context c) (
+    string path = c.Request.URL.Path
+    if path.startsWith("/api") (
+        c.JSON(401, { ok: false, error: "not authenticated" })
+    ) else (
+        c.Redirect(302, "/auth")
+    )
+    c.Abort()
+)
+
+def requireSession(*gin.Context c) (
+    string sessionId = c.Cookie("session_id").toArray()[1].toStr()
+    if sessionId == "" (
+        abortUnauthorized(c)
+        return
+    )
+    if !sessions.contains(sessionId) (
+        abortUnauthorized(c)
+        return
+    )
+    c.Set("username", sessions[sessionId])
+    c.Next()
+)

@@ -1,0 +1,232 @@
+def randomString(int length) string (
+    string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    string result = ""
+    for i length (
+        result = result ++ chars[rand.Intn(chars.len) + 1].toStr()
+    )
+    return result
+)
+
+def noCORS(*gin.Context c) (
+    c.Header("Access-Control-Allow-Origin", "*")
+    string origin = c.GetHeader("Origin")
+    if origin != "" (
+        c.Header("Access-Control-Allow-Origin", origin)
+        c.Header("Access-Control-Allow-Credentials", "true")
+        c.Next()
+        return
+    )
+    c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+    c.Header("Access-Control-Allow-Headers", "*")
+    if c.Request.Method == "OPTIONS" (
+        c.AbortWithStatus(204)
+        return
+    )
+    c.Next()
+)
+
+def getAble(string username) object (
+    username = username.toLower()
+    object profile = userData[username]
+    if profile == null (
+        return { canAccess: false, maxUpload: "0" }
+    )
+    string subscription = profile.subscription.toStr().toLower()
+    return {
+        canAccess: (subscription == "drive" or subscription == "pro" or subscription == "max"),
+        maxUpload: "15000000"
+    }
+)
+
+def userDbPath(string username) string (
+    return "db/" ++ username.toLower() ++ "/images.json"
+)
+
+def ensureUserDb(string username) (
+    string dir = "db/" ++ username.toLower()
+    if !fs.Exists(dir) (
+        fs.MkdirAll(dir)
+    )
+    string path = userDbPath(username)
+    if !fs.Exists(path) (
+        fs.WriteFile(path, "[]")
+    )
+)
+
+def readUserImages(string username) array (
+    ensureUserDb(username)
+    string path = userDbPath(username)
+    string data = fs.ReadFile(path)
+    if data == "" (
+        return []
+    )
+    array arr = data.JsonParse()
+    return arr
+)
+
+def writeUserImages(string username, array arr) bool (
+    string path = userDbPath(username)
+    string out = arr.toStr()
+    return fs.WriteFile(path, out)
+)
+
+def findImage(array arr, string id) object (
+    for i arr.len (
+        object it = arr[i]
+        if it.id.toStr() == id (
+            return it
+        )
+    )
+    return {}
+)
+
+def removeImage(array arr, string id) array (
+    array out = []
+    for i arr.len (
+        object it = arr[i]
+        if it.id.toStr() != id (
+            out.append(it)
+        )
+    )
+    return out
+)
+
+def userAlbumsPath(string username) string (
+    return "db/" ++ username.toLower() ++ "/albums.json"
+)
+
+def ensureUserAlbums(string username) (
+    string dir = "db/" ++ username.toLower()
+    if !fs.Exists(dir) (
+        fs.MkdirAll(dir)
+    )
+    string path = userAlbumsPath(username)
+    if !fs.Exists(path) (
+        fs.WriteFile(path, "{ \"albums\": [], \"items\": {} }")
+    )
+)
+
+def readUserAlbums(string username) object (
+    ensureUserAlbums(username)
+    string path = userAlbumsPath(username)
+    string data = fs.ReadFile(path)
+    if data == "" (
+        return { albums: [], items: {} }
+    )
+    object obj = data.JsonParse()
+    if obj.albums == null (
+        obj.albums = []
+    )
+    if obj.items == null (
+        obj.items = {}
+    )
+    return obj
+)
+
+def writeUserAlbums(string username, object albums) bool (
+    string path = userAlbumsPath(username)
+    string out = albums.toStr()
+    return fs.WriteFile(path, out)
+)
+
+def addAlbum(string username, string name) object (
+    object albums = readUserAlbums(username)
+    array list = albums.albums
+    bool exists = false
+    for i list.len (
+        if list[i].toStr().toLower() == name.toLower() (
+            exists = true
+        )
+    )
+    if !exists (
+        list.append(name)
+        albums.albums = list
+    )
+    if !albums.items[name] (
+        albums.items[name] = []
+    )
+    writeUserAlbums(username, albums)
+    return albums
+)
+
+def removeAlbumDef(string username, string name) object (
+    object albums = readUserAlbums(username)
+    array list = albums.albums
+    array out = []
+    for i list.len (
+        string it = list[i].toStr()
+        if it.toLower() != name.toLower() (
+            out.append(it)
+        )
+    )
+    albums.albums = out
+    albums.items.delete(name)
+    writeUserAlbums(username, albums)
+    return albums
+)
+
+def addImageToAlbum(string username, string name, string id) object (
+    object albums = readUserAlbums(username)
+    if !albums.items[name] (
+        albums.items[name] = []
+    )
+    array ids = albums.items[name]
+    bool exists = false
+    for i ids.len (
+        if ids[i].toStr() == id (
+            exists = true
+        )
+    )
+    if !exists (
+        ids.append(id)
+        albums.items[name] = ids
+        writeUserAlbums(username, albums)
+    )
+    return albums
+)
+
+def removeImageFromAlbum(string username, string name, string id) object (
+    object albums = readUserAlbums(username)
+    array ids = albums.items[name]
+    array out = []
+    for i ids.len (
+        if ids[i].toStr() != id (
+            out.append(ids[i])
+        )
+    )
+    albums.items[name] = out
+    writeUserAlbums(username, albums)
+    return albums
+)
+
+def userBinPath(string username) string (
+    return "db/" ++ username.toLower() ++ "/bin.json"
+)
+
+def ensureUserBin(string username) (
+    string dir = "db/" ++ username.toLower()
+    if !fs.Exists(dir) (
+        fs.MkdirAll(dir)
+    )
+    string path = userBinPath(username)
+    if !fs.Exists(path) (
+        fs.WriteFile(path, "[]")
+    )
+)
+
+def readUserBin(string username) array (
+    ensureUserBin(username)
+    string path = userBinPath(username)
+    string data = fs.ReadFile(path)
+    if data == "" (
+        return []
+    )
+    array arr = data.JsonParse()
+    return arr
+)
+
+def writeUserBin(string username, array arr) bool (
+    string path = userBinPath(username)
+    string out = arr.toStr()
+    return fs.WriteFile(path, out)
+)

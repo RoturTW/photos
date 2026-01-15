@@ -1,0 +1,562 @@
+def handleAuth(*gin.Context c) (
+    string token = c.Query("v")
+    if token == "" (
+        c.JSON(401, { ok: false, error: "missing token" })
+        return
+    )
+    object resp = requests.Get("https://api.rotur.dev/validate?key=rotur-gate&v=" + token)
+
+    if !resp.success (
+        c.JSON(401, { ok: false, error: "failed to validate token" })
+        return
+    )
+
+    object json = resp.body.toStr().JsonParse()
+    if json.error != null (
+        c.JSON(401, { ok: false, error: json.error })
+        return
+    )
+    if !json.valid (
+        c.JSON(401, { ok: false, error: "invalidate token" })
+        return
+    )
+
+    string sessionId = randomString(32)
+    
+    string username = token.split(",")[1]
+    sessions[sessionId] = username
+
+    object resp_profile = requests.Get("https://api.rotur.dev/profile?name=" + username)
+    if !resp_profile.success (
+        c.JSON(401, { ok: false, error: "failed to fetch profile" })
+        return
+    )
+    object profile = resp_profile.body.toStr().JsonParse()
+    if profile.error != null (
+        c.JSON(401, { ok: false, error: profile.error })
+        return
+    )
+    userData[username.toLower()] = profile
+
+    c.SetCookie("session_id", sessionId, 3600, "/", "", false, true)
+
+    c.JSON(200, { ok: true, token: token })
+)
+
+def handleAble(*gin.Context c) (
+    string username = c.MustGet("username").toStr()
+    object able = getAble(username)
+    c.JSON(200, able)
+)
+
+def handleRecentImages(*gin.Context c) (
+    string username = c.MustGet("username").toStr()
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    array arr = readUserImages(username)
+    int n = arr.len
+    number nowMs = time.Now().UnixMilli()
+    number ninety = 90 * 24 * 60 * 60 * 1000
+    array out = []
+    for i n (
+        object it = arr[i]
+        number ts = it.timestamp.toNum()
+        if (nowMs - ts) <= ninety (
+            out.append(it)
+        )
+    )
+    c.JSON(200, out)
+)
+
+def handleYearImages(*gin.Context c) (
+    string username = c.MustGet("username").toStr()
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    int year = c.Param("year").toNum()
+    array arr = readUserImages(username)
+    int n = arr.len
+    array out = []
+    for i n (
+        object it = arr[i]
+        int ts = it.timestamp.toNum()
+        t := time.UnixMilli(int64(ts))
+        if t.Year() == year (
+            out.append(it)
+        )
+    )
+    c.JSON(200, out)
+)
+
+def handleMonthImages(*gin.Context c) (
+    string username = c.MustGet("username").toStr()
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    int year = c.Param("year").toNum()
+    int month = c.Param("month").toNum()
+    array arr = readUserImages(username)
+    int n = arr.len
+    array out = []
+    for i n (
+        object it = arr[i]
+        int ts = it.timestamp.toNum()
+        t := time.UnixMilli(int64(ts))
+        if t.Year() == year and int(t.Month()) == month (
+            out.append(it)
+        )
+    )
+    c.JSON(200, out)
+)
+
+def handleUpload(*gin.Context c) (
+    string username = c.MustGet("username").toStr()
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    string tmpBase = "db/" ++ username.toLower() ++ "/blob"
+    if !fs.Exists(tmpBase) (
+        fs.MkdirAll(tmpBase)
+    )
+    string tmpPath = tmpBase ++ "/tmp-" ++ randomString(16)
+    string body = c.Request.Body.toStr()
+    if body == "" (
+        c.JSON(400, { ok: false, error: "empty body" })
+        return
+    )
+    bool wroteTmp = fs.WriteFile(tmpPath, body)
+    if !wroteTmp (
+        c.JSON(500, { ok: false, error: "failed to write upload" })
+        return
+    )
+    string imgId = img.DecodeFile(tmpPath)
+    if imgId == "" (
+        c.JSON(400, { ok: false, error: "invalid image" })
+        fs.Remove(tmpPath)
+        return
+    )
+    object size = img.Size(imgId)
+    int w = round(size["w"])
+    int h = round(size["h"])
+    string id = randomString(24)
+    string path = tmpBase ++ "/" ++ id ++ ".jpg"
+    string rid = img.Resize(imgId, w, h)
+    bool wrote = img.SaveJPEG(rid, path, 90)
+    if !wrote (
+        c.JSON(500, { ok: false, error: "failed to save" })
+        fs.Remove(tmpPath)
+        return
+    )
+    number tsms = time.Now().UnixMilli()
+    raw("f, err := os.Open(tmpPath)")
+    if err == null (
+        raw("x, err := exif.Decode(f)")
+        if err == null (
+            raw("t0, err := x.DateTime()")
+            if err == null and !t0.IsZero() (
+                tsms = t0.UnixMilli().toNum()
+            ) else (
+                raw("tag, err := x.Get(exif.DateTimeOriginal)")
+                if err == null and tag != null (
+                    raw("s, err := tag.StringVal()")
+                    if err == null (
+                        raw("t1, err := time.Parse(\"2006:01:02 15:04:05\", s)")
+                        if err == null and !t1.IsZero()  (
+                            tsms = t1.UnixMilli().toNum()
+                        )
+                    )
+                )
+            )
+        )
+    )
+    fs.Remove(tmpPath)
+    array arr = readUserImages(username)
+    object entry = { id: id, width: w, height: h, timestamp: tsms }
+    arr.append(entry)
+    writeUserImages(username, arr)
+    c.JSON(200, { ok: true, id: id })
+)
+
+def handleId(*gin.Context c) (
+    string username = c.MustGet("username").toStr()
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    string id = c.Param("id").toStr()
+    boolean json = false
+    if id.endsWith(".json") (
+        id = id.trim(1, -6)
+        json = true
+    )
+    if json (
+        object it = findImage(readUserImages(username), id)
+        if it.id == null (
+            c.JSON(404, { ok: false, error: "not found" })
+            return
+        )
+        c.JSON(200, it)
+        return
+    )
+    string path = "db/" ++ username.toLower() ++ "/blob/" ++ id ++ ".jpg"
+    []byte data = fs.ReadFileBytes(path)
+    if data.len == 0 (
+        c.JSON(404, { ok: false, error: "not found" })
+        return
+    )
+    c.Data(200, "image/jpeg", data)
+)
+
+def handleSearch(*gin.Context c) (
+    string username = c.MustGet("username").toStr()
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    string q = c.Query("q").toStr().toLower()
+    array arr = readUserImages(username)
+    if q == "" (
+        c.JSON(200, arr)
+        return
+    )
+    array out = []
+    int n = arr.len
+    for i n (
+        object it = arr[i]
+        if it.id.toStr().toLower().contains(q) (
+            out.append(it)
+        )
+    )
+    c.JSON(200, out)
+)
+
+def handleShareMine(*gin.Context c) (
+    c.JSON(200, [])
+)
+
+def handleShareOthers(*gin.Context c) (
+    c.JSON(200, [])
+)
+
+def handleSharePatch(*gin.Context c) (
+    c.JSON(501, { ok: false, error: "not implemented" })
+)
+def handlePreview(*gin.Context c) (
+    string username = c.MustGet("username").toStr()
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    string id = c.Param("id").toStr()
+    string path = "db/" ++ username.toLower() ++ "/blob/" ++ id ++ ".jpg"
+    []byte data = fs.ReadFileBytes(path)
+    if data.len == 0 (
+        c.JSON(404, { ok: false, error: "not found" })
+        return
+    )
+    c.Header("Cache-Control", "public, max-age=31536000, immutable")
+    string imgId = img.DecodeBytes(data)
+    if imgId == "" (
+        c.JSON(400, { ok: false, error: "invalid image" })
+        return
+    )
+    object s = img.Size(imgId)
+    number w = s.w.toNum()
+    number h = s.h.toNum()
+    number maxw = 800
+    number maxh = 800
+    number rw = w
+    number rh = h
+    if w > maxw (
+        rw = maxw
+        rh = h * maxw / w
+    )
+    if rh > maxh (
+        rh = maxh
+        rw = rw * maxh / rh
+    )
+    string rid = img.Resize(imgId, round(rw), round(rh))
+    []byte out = img.EncodeJPEG(rid, 80)
+    c.Data(200, "image/jpeg", out)
+)
+
+def handleDeleteImage(*gin.Context c) (
+    string username = c.MustGet("username").toStr()
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    string id = c.Param("id").toStr()
+    string base = "db/" ++ username.toLower()
+    string path = base ++ "/blob/" ++ id ++ ".jpg"
+    string binBase = base ++ "/bin"
+    if !fs.Exists(binBase) (
+        fs.MkdirAll(binBase)
+    )
+    []byte data = fs.ReadFileBytes(path)
+    if data.len > 0 (
+        string imgId = img.DecodeBytes(data)
+        if imgId != "" (
+            object s = img.Size(imgId)
+            int w = round(s.w)
+            int h = round(s.h)
+            string rid = img.Resize(imgId, w, h)
+            string binPath = binBase ++ "/" ++ id ++ ".jpg"
+            bool wrote = img.SaveJPEG(rid, binPath, 90)
+            if wrote (
+                array binArr = readUserBin(username)
+                number tsms = time.Now().UnixMilli()
+                array arr = readUserImages(username)
+                object it = findImage(arr, id)
+                number origTs = it.timestamp.toNum()
+                if origTs == 0 (
+                    origTs = tsms
+                )
+                object entry = { id: id, width: w, height: h, timestamp: origTs, deletedAt: tsms }
+                binArr.append(entry)
+                writeUserBin(username, binArr)
+            )
+        )
+    )
+    if fs.Exists(path) (
+        fs.Remove(path)
+    )
+    array arr = readUserImages(username)
+    array out = removeImage(arr, id)
+    writeUserImages(username, out)
+    c.JSON(200, { ok: true })
+)
+
+def handleBinList(*gin.Context c) (
+    string username = c.MustGet("username").toStr()
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    array arr = readUserBin(username)
+    c.JSON(200, arr)
+)
+
+def handleBinRestore(*gin.Context c) (
+    string username = c.MustGet("username")
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    string id = c.Param("id")
+    string base = "db/" ++ username.toLower()
+    string binPath = base ++ "/bin/" ++ id ++ ".jpg"
+    string blobPath = base ++ "/blob/" ++ id ++ ".jpg"
+    []byte data = fs.ReadFileBytes(binPath)
+    if data.len == 0 (
+        c.JSON(404, { ok: false, error: "not found" })
+        return
+    )
+    string imgId = img.DecodeBytes(data)
+    if imgId == "" (
+        c.JSON(400, { ok: false, error: "invalid image" })
+        return
+    )
+    object s = img.Size(imgId)
+    int w = round(s.w)
+    int h = round(s.h)
+    string rid = img.Resize(imgId, w, h)
+    bool wrote = img.SaveJPEG(rid, blobPath, 90)
+    if !wrote (
+        c.JSON(500, { ok: false, error: "failed to restore" })
+        return
+    )
+    array binArr = readUserBin(username)
+    array newBin = []
+    number ts = time.Now().UnixMilli()
+    for i binArr.len (
+        object it = binArr[i]
+        if it.id.toStr() != id (
+            newBin.append(it)
+        ) else (
+            ts = it.timestamp.toNum()
+        )
+    )
+    writeUserBin(username, newBin)
+    array arr = readUserImages(username)
+    object entry = { id: id, width: w, height: h, timestamp: ts }
+    arr.append(entry)
+    writeUserImages(username, arr)
+    fs.Remove(binPath)
+    c.JSON(200, { ok: true })
+)
+
+def handleBinDelete(*gin.Context c) (
+    string username = c.MustGet("username")
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    string id = c.Param("id")
+    string base = "db/" ++ username.toLower()
+    string binPath = base ++ "/bin/" ++ id ++ ".jpg"
+    if fs.Exists(binPath) (
+        fs.Remove(binPath)
+    )
+    array binArr = readUserBin(username)
+    array newBin = []
+    for i binArr.len (
+        object it = binArr[i]
+        if it.id.toStr() != id (
+            newBin.append(it)
+        )
+    )
+    writeUserBin(username, newBin)
+    c.JSON(200, { ok: true })
+)
+
+def handleAlbums(*gin.Context c) (
+    string username = c.MustGet("username")
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    object albums = readUserAlbums(username)
+    c.JSON(200, albums.albums)
+)
+
+def handleAlbumCreate(*gin.Context c) (
+    string username = c.MustGet("username")
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    string name = c.Query("name")
+    if name == "" (
+        c.JSON(400, { ok: false, error: "missing name" })
+        return
+    )
+    object albums = addAlbum(username, name)
+    c.JSON(200, albums.albums)
+)
+
+def handleAlbumDelete(*gin.Context c) (
+    string username = c.MustGet("username")
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    string name = c.Param("name")
+    object albums = removeAlbumDef(username, name)
+    c.JSON(200, albums.albums)
+)
+
+def handleAlbumImages(*gin.Context c) (
+    string username = c.MustGet("username")
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    string name = c.Param("name")
+    object albums = readUserAlbums(username)
+    array ids = albums.items[name]
+    array all = readUserImages(username)
+    array out = []
+    for i ids.len (
+        string id = ids[i].toStr()
+        object it = findImage(all, id)
+        if it.id != null (
+            out.append(it)
+        )
+    )
+    c.JSON(200, out)
+)
+
+def handleAlbumAdd(*gin.Context c) (
+    string username = c.MustGet("username")
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    string name = c.Param("name")
+    string id = c.Query("id")
+    if name == "" or id == "" (
+        c.JSON(400, { ok: false, error: "missing params" })
+        return
+    )
+    addImageToAlbum(username, name, id)
+    c.JSON(200, { ok: true })
+)
+
+def handleAlbumRemove(*gin.Context c) (
+    string username = c.MustGet("username")
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    string name = c.Param("name")
+    string id = c.Query("id")
+    if name == "" or id == "" (
+        c.JSON(400, { ok: false, error: "missing params" })
+        return
+    )
+    removeImageFromAlbum(username, name, id)
+    c.JSON(200, { ok: true })
+)
+
+def handleBinPreview(*gin.Context c) (
+    string username = c.MustGet("username").toStr()
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    string id = c.Param("id").toStr()
+    string path = "db/" ++ username.toLower() ++ "/bin/" ++ id ++ ".jpg"
+    []byte data = fs.ReadFileBytes(path)
+    if data.len == 0 (
+        c.JSON(404, { ok: false, error: "not found" })
+        return
+    )
+    c.Header("Cache-Control", "public, max-age=31536000, immutable")
+    string imgId = img.DecodeBytes(data)
+    if imgId == "" (
+        c.JSON(400, { ok: false, error: "invalid image" })
+        return
+    )
+    object s = img.Size(imgId)
+    number w = s.w.toNum()
+    number h = s.h.toNum()
+    number maxw = 800
+    number maxh = 800
+    number rw = w
+    number rh = h
+    if w > maxw (
+        rw = maxw
+        rh = h * maxw / w
+    )
+    if rh > maxh (
+        rh = maxh
+        rw = rw * maxh / rh
+    )
+    string rid = img.Resize(imgId, round(rw), round(rh))
+    []byte out = img.EncodeJPEG(rid, 80)
+    c.Data(200, "image/jpeg", out)
+)

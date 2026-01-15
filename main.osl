@@ -1,0 +1,75 @@
+import "osl/fs"
+import "osl/requests"
+import "osl/img"
+
+import "math/rand"
+import "os"
+import "time"
+import "github.com/gin-gonic/gin"
+import "github.com/joho/godotenv as godotenv"
+import "github.com/rwcarlsen/goexif/exif"
+
+import "./middleware.osl"
+import "./pages.osl"
+import "./handlers.osl"
+import "./utils.osl"
+
+object sessions = {}
+object userData = {}
+
+string authKey = ""
+
+def up(*gin.Context c) (
+    c.String(200, "ok")
+)
+
+def main() (
+    string home = os.Getenv("HOME")
+    godotenv.Overload(home ++ "/Documents/.env")
+    godotenv.Load()
+
+    r := gin.Default()
+    r.Use(noCORS)
+
+    r.LoadHTMLGlob("templates/*")
+    r.Static("/static", "./static")
+
+    r.GET("/", requireSession, homePage)
+    r.GET("/auth", authPage)
+
+    api := r.Group("/api")
+    api.GET("/auth", handleAuth)
+    api.GET("/able", requireSession, handleAble)
+    api.GET("/search", requireSession, handleSearch)
+    api.GET("/share/mine", requireSession, handleShareMine)
+    api.GET("/share/others", requireSession, handleShareOthers)
+    api.PATCH("/share/:id", requireSession, handleSharePatch)
+
+    images := api.Group("/images")
+    images.GET("/recent", requireSession, handleRecentImages)
+    images.GET("/:year", requireSession, handleYearImages)
+    images.GET("/:year/:month", requireSession, handleMonthImages)
+
+    image := api.Group("/image")
+    image.POST("/upload", requireSession, handleUpload)
+    api.POST("/image", requireSession, handleUpload)
+    image.DELETE("/:id", requireSession, handleDeleteImage)
+    image.GET("/:id", requireSession, handleId)
+    image.GET("/preview/:id", requireSession, handlePreview)
+
+    albums := api.Group("/albums")
+    albums.GET("", requireSession, handleAlbums)
+    albums.POST("", requireSession, handleAlbumCreate)
+    albums.DELETE("/:name", requireSession, handleAlbumDelete)
+    albums.GET("/:name", requireSession, handleAlbumImages)
+    albums.POST("/:name/add", requireSession, handleAlbumAdd)
+    albums.POST("/:name/remove", requireSession, handleAlbumRemove)
+
+    bin := api.Group("/bin")
+    bin.GET("", requireSession, handleBinList)
+    bin.POST("/restore/:id", requireSession, handleBinRestore)
+    bin.DELETE("/:id", requireSession, handleBinDelete)
+    bin.GET("/preview/:id", requireSession, handleBinPreview)
+
+    r.Run(":5606")
+)
