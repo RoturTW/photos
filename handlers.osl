@@ -184,26 +184,31 @@ def handleUpload(*gin.Context c) (
         c.JSON(403, { ok: false, error: "storage quota exceeded" })
         return
     )
-    bool wroteTmp = fs.WriteFile(tmpPath, body)
+    boolean wroteTmp = fs.WriteFile(tmpPath, body)
     if !wroteTmp (
         c.JSON(500, { ok: false, error: "failed to write upload" })
         return
     )
-    string imgId = img.DecodeFile(tmpPath)
-    if imgId == "" (
+    im := img.Open(tmpPath)
+    if im == nil (
         c.JSON(400, { ok: false, error: "invalid image" })
         fs.Remove(tmpPath)
         return
     )
-    defer img.Free(imgId)
-    object size = img.Size(imgId)
+    defer im.Close()
+    object size = im.Size()
     int w = round(size["w"])
     int h = round(size["h"])
     string id = randomString(24)
     string path = tmpBase ++ "/" ++ id ++ ".jpg"
-    string rid = img.Resize(imgId, w, h)
-    defer img.Free(rid)
-    bool wrote = img.SaveJPEG(rid, path, 90)
+    resized := img.Resize(im, w, h)
+    if resized == null (
+        c.JSON(500, { ok: false, error: "failed to resize" })
+        fs.Remove(tmpPath)
+        return
+    )
+    defer resized.Close()
+    boolean wrote = img.SaveJPEG(resized, path, 90)
     if !wrote (
         c.JSON(500, { ok: false, error: "failed to save" })
         fs.Remove(tmpPath)
@@ -311,27 +316,26 @@ def handleImageRotate(*gin.Context c) (
     number angle = body["angle"].toNum()
 
     string path = "db/" ++ username.toLower() ++ "/blob/" ++ id ++ ".jpg"
-    []byte data = fs.ReadFileBytes(path)
-    if data.len == 0 (
+    if !fs.Exists(path) or fs.IsDir(path) (
         c.JSON(404, { ok: false, error: "not found" })
         return
     )
 
-    string imgId = img.DecodeBytes(data)
-    if imgId == "" (
+    imgFile := img.Open(path)
+    if imgFile == null (
         c.JSON(400, { ok: false, error: "invalid image" })
         return
     )
-    defer img.Free(imgId)
+    defer imgFile.Close()
 
-    string rotatedId = img.Rotate(imgId, angle)
-    if rotatedId == "" (
+    rotated := img.Rotate(imgFile, angle)
+    if rotated == null (
         c.JSON(500, { ok: false, error: "failed to rotate" })
         return
     )
-    defer img.Free(rotatedId)
+    defer rotated.Close()
     
-    bool wrote = img.SaveJPEG(rotatedId, path, 90)
+    boolean wrote = img.SaveJPEG(rotated, path, 90)
     if !wrote (
         c.JSON(500, { ok: false, error: "failed to save" })
         return
@@ -607,7 +611,6 @@ def handleSharedImageInfo(*gin.Context c) (
     c.JSON(200, img)
 )
 
-
 def handlePreview(*gin.Context c) (
     string username = c.MustGet("username").toStr()
     object able = getAble(username)
@@ -617,53 +620,7 @@ def handlePreview(*gin.Context c) (
     )
     string id = c.Param("id").toStr()
     string path = "db/" ++ username.toLower() ++ "/blob/" ++ id ++ ".jpg"
-    if !fs.Exists(path) or fs.IsDir(path) (
-        c.JSON(404, { ok: false, error: "not found" })
-        return
-    )
-    
-    object fileInfo = fs.GetStat(path)
-    string etag = "preview-" ++ fileInfo.modTime.toStr()
-    string ifNoneMatch = c.GetHeader("If-None-Match")
-    if ifNoneMatch == etag (
-        c.Status(304)
-        return
-    )
-    
-    []byte data = fs.ReadFileBytes(path)
-    if data.len == 0 (
-        c.JSON(404, { ok: false, error: "not found" })
-        return
-    )
-    
-    c.Header("ETag", etag)
-    c.Header("Cache-Control", "private, must-revalidate")
-    
-    string imgId = img.DecodeBytes(data)
-    defer img.Free(imgId)
-    if imgId == "" (
-        c.JSON(400, { ok: false, error: "invalid image" })
-        return
-    )
-    object s = img.Size(imgId)
-    number w = s.w.toNum()
-    number h = s.h.toNum()
-    number maxw = 200
-    number maxh = 200
-    number rw = w
-    number rh = h
-    if w > maxw (
-        rw = maxw
-        rh = h * maxw / w
-    )
-    if rh > maxh (
-        rh = maxh
-        rw = rw * maxh / rh
-    )
-    string rid = img.Resize(imgId, round(rw), round(rh))
-    defer img.Free(rid)
-    []byte out = img.EncodeJPEG(rid, 80)
-    c.Data(200, "image/jpeg", out)
+    servePreview(c, path)
 )
 
 def handleDeleteImage(*gin.Context c) (
@@ -680,18 +637,20 @@ def handleDeleteImage(*gin.Context c) (
     if !fs.Exists(binBase) (
         fs.MkdirAll(binBase)
     )
-    []byte data = fs.ReadFileBytes(path)
+    byte[] data = fs.ReadFileBytes(path)
     if data.len > 0 (
-        string imgId = img.DecodeBytes(data)
-        defer img.Free(imgId)
-        if imgId != "" (
-            object s = img.Size(imgId)
+        imgFile := img.DecodeBytes(data)
+        if imgFile != null (
+            object s = img.Size(imgFile)
             int w = round(s.w)
             int h = round(s.h)
-            string rid = img.Resize(imgId, w, h)
-            defer img.Free(rid)
+            resized := img.Resize(imgFile, w, h)
+            if resized == null (
+                c.JSON(500, { ok: false, error: "resize failed" })
+                return
+            )
             string binPath = binBase ++ "/" ++ id ++ ".jpg"
-            bool wrote = img.SaveJPEG(rid, binPath, 90)
+            bool wrote = img.SaveJPEG(resized, binPath, 90)
             if wrote (
                 array binArr = readUserBin(username)
                 number tsms = time.Now().UnixMilli()
@@ -738,23 +697,22 @@ def handleBinRestore(*gin.Context c) (
     string base = "db/" ++ username.toLower()
     string binPath = base ++ "/bin/" ++ id ++ ".jpg"
     string blobPath = base ++ "/blob/" ++ id ++ ".jpg"
-    []byte data = fs.ReadFileBytes(binPath)
-    if data.len == 0 (
+    imgFile := img.Open(binPath)
+    if imgFile == null (
         c.JSON(404, { ok: false, error: "not found" })
         return
     )
-    string imgId = img.DecodeBytes(data)
-    defer img.Free(imgId)
-    if imgId == "" (
-        c.JSON(400, { ok: false, error: "invalid image" })
+    defer imgFile.Close()
+    object size = img.Size(imgFile)
+    int w = round(size["w"])
+    int h = round(size["h"])
+    resized := img.Resize(imgFile, w, h)
+    if resized == null (
+        c.JSON(500, { ok: false, error: "failed to resize" })
         return
     )
-    object s = img.Size(imgId)
-    int w = round(s.w)
-    int h = round(s.h)
-    string rid = img.Resize(imgId, w, h)
-    defer img.Free(rid)
-    bool wrote = img.SaveJPEG(rid, blobPath, 90)
+    defer resized.Close()
+    bool wrote = img.SaveJPEG(resized, blobPath, 90)
     if !wrote (
         c.JSON(500, { ok: false, error: "failed to restore" })
         return
@@ -920,43 +878,13 @@ def handleAlbumRemove(*gin.Context c) (
 def handleBinPreview(*gin.Context c) (
     string username = c.MustGet("username").toStr()
     object able = getAble(username)
-    if !able.canAccess (
+    if able.canAccess == false (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
     string id = c.Param("id").toStr()
     string path = "db/" ++ username.toLower() ++ "/bin/" ++ id ++ ".jpg"
-    []byte data = fs.ReadFileBytes(path)
-    if data.len == 0 (
-        c.JSON(404, { ok: false, error: "not found" })
-        return
-    )
-    c.Header("Cache-Control", "public, max-age=31536000, immutable")
-    string imgId = img.DecodeBytes(data)
-    defer img.Free(imgId)
-    if imgId == "" (
-        c.JSON(400, { ok: false, error: "invalid image" })
-        return
-    )
-    object s = img.Size(imgId)
-    number w = s.w.toNum()
-    number h = s.h.toNum()
-    number maxw = 800
-    number maxh = 800
-    number rw = w
-    number rh = h
-    if w > maxw (
-        rw = maxw
-        rh = h * maxw / w
-    )
-    if rh > maxh (
-        rh = maxh
-        rw = rw * maxh / rh
-    )
-    string rid = img.Resize(imgId, round(rw), round(rh))
-    defer img.Free(rid)
-    []byte out = img.EncodeJPEG(rid, 80)
-    c.Data(200, "image/jpeg", out)
+    servePreview(c, path)
 )
 
 def handleShareInfo(*gin.Context c) (

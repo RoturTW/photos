@@ -537,3 +537,74 @@ def getSharedWithMe(string username) array (
     )
     return results
 )
+
+def servePreview(*gin.Context c, string path) boolean (
+    if !fs.Exists(path) or fs.IsDir(path) (
+        c.JSON(404, { ok: false, error: "not found" })
+        return false
+    )
+    
+    object fileInfo = fs.GetStat(path)
+    string etag = "preview-" ++ fileInfo.modTime.toStr()
+    string ifNoneMatch = c.GetHeader("If-None-Match")
+    if ifNoneMatch == etag (
+        c.Status(304)
+        return true
+    )
+    
+    c.Header("ETag", etag)
+    c.Header("Cache-Control", "private, must-revalidate")
+    
+    number fileSize = fileInfo.size.toNum()
+    if fileSize == 0 (
+        c.JSON(404, { ok: false, error: "not found" })
+        return false
+    )
+    if fileSize > 10000000 (
+        c.JSON(413, { ok: false, error: "file too large" })
+        return false
+    )
+    
+    im := img.Open(path)
+    if im == null (
+        c.JSON(400, { ok: false, error: "invalid image" })
+        return false
+    )
+    defer im.Close()
+    
+    number w = im.Width()
+    number h = im.Height()
+    number maxw = 200
+    number maxh = 200
+    
+    if w <= maxw and h <= maxh (
+        byte[] out = img.EncodeJPEGBytes(im, 80)
+        if out.len == 0 (
+            c.JSON(500, { ok: false, error: "encode failed" })
+            return false
+        )
+        c.Data(200, "image/jpeg", out)
+        return true
+    )
+    
+    number ratio = min(maxw / w, maxh / h)
+    int rw = round(w * ratio)
+    int rh = round(h * ratio)
+    
+    resized := img.Resize(im, rw, rh)
+    if resized == null (
+        c.JSON(500, { ok: false, error: "resize failed" })
+        return false
+    )
+    defer resized.Close()
+    
+    im.Close()
+    
+    byte[] out = img.EncodeJPEGBytes(resized, 80)
+    if out.len == 0 (
+        c.JSON(500, { ok: false, error: "encode failed" })
+        return false
+    )
+    c.Data(200, "image/jpeg", out)
+    return true
+)
