@@ -73,10 +73,6 @@ export function createPhotoCard(item) {
     card.dataset.id = item.id;
     if (state.selectedItems.has(item.id)) card.classList.add("selected");
 
-    const aspectRatio = (item.width && item.height) ? (item.width / item.height) : 1;
-    const span = aspectRatio > 1.5 ? 2 : 1;
-    card.style.gridColumnEnd = `span ${span}`;
-
     const isFavorite = state.favorites.has(item.id);
     const previewUrl = item.owner ? `/api/shared/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.id)}` : (state.view === "bin" ? `/api/bin/preview/${encodeURIComponent(item.id)}` : `/api/image/preview/${encodeURIComponent(item.id)}`);
 
