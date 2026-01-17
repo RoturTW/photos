@@ -85,5 +85,5 @@ def main() (
 
     r.GET("/:username/:id", handleDirectImage)
 
-    r.Run(":5606")
+    r.Run(":5607")
 )
