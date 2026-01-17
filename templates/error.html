@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}} - roturPhotos</title>
+    <link rel="stylesheet" href="/static/styles/photos.css">
+    <style>
+        body {
+            background: #0a0a0a;
+            color: #fff;
+            font-family: 'Google Sans', 'Inter', sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        .error-card {
+            background: #111;
+            padding: 48px;
+            border-radius: 12px;
+            border: 1px solid #222;
+            text-align: center;
+            max-width: 400px;
+        }
+
+        h1 {
+            font-size: 24px;
+            margin-bottom: 16px;
+            color: #f5576c;
+        }
+
+        p {
+            opacity: 0.8;
+            line-height: 1.6;
+        }
+
+        .btn {
+            display: inline-block;
+            margin-top: 24px;
+            background: #2563eb;
+            color: #fff;
+            padding: 12px 24px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 500;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="error-card">
+        <h1>{{.Title}}</h1>
+        <p>{{.Message}}</p>
+        <a href="/" class="btn">Back to Dashboard</a>
+    </div>
+</body>
+
+</html>

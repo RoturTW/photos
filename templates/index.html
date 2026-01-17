@@ -5,171 +5,222 @@
   <meta charset="utf-8">
   <title>roturPhotos</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    :root {
-      color-scheme: dark;
-      --bg: #121212;
-      --panel: #1e1e1e;
-      --text: #e6e6e6;
-      --muted: #aaaaaa;
-      --accent: #8ab4f8;
-      --border: #2a2a2a;
-    }
-    html, body { height:100%; }
-    body {
-      margin:0;
-      background: var(--bg);
-      color: var(--text);
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, sans-serif;
-    }
-    .app {
-      display: grid;
-      grid-template-columns: 280px 1fr;
-      grid-template-rows: 64px 1fr;
-      grid-template-areas:
-        "sidebar header"
-        "sidebar content";
-      height: 100%;
-    }
-    .header {
-      grid-area: header;
-      display: flex;
-      align-items: center;
-      gap: 16px;
-      padding: 0 16px;
-      border-bottom: 1px solid var(--border);
-      background: var(--panel);
-      position: sticky;
-      top: 0;
-      z-index: 10;
-    }
-    .logo {
-      font-weight: 600;
-      letter-spacing: .2px;
-    }
-    .search {
-      flex: 1;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      background: #262626;
-      border: 1px solid var(--border);
-      border-radius: 24px;
-      padding: 6px 12px;
-    }
-    .search input {
-      flex: 1;
-      border: 0;
-      outline: 0;
-      background: transparent;
-      color: var(--text);
-      font-size: 14px;
-    }
-    .avatar {
-      width: 32px; height: 32px; border-radius: 50%;
-      border: 1px solid var(--border);
-    }
-    .sidebar {
-      grid-area: sidebar;
-      padding: 16px;
-      border-right: 1px solid var(--border);
-      background: var(--panel);
-    }
-    .nav {
-      display: flex; flex-direction: column; gap: 6px;
-    }
-    .nav button {
-      text-align: left;
-      border: 0;
-      padding: 10px 12px;
-      border-radius: 12px;
-      background: transparent;
-      color: var(--text);
-      cursor: pointer;
-    }
-    .nav button:hover { background: #232323; }
-    .content {
-      grid-area: content;
-      padding: 16px;
-      overflow: auto;
-    }
-    .toolbar {
-      display: flex; align-items: center; gap: 12px; margin-bottom: 0;
-    }
-    .btn {
-      border: 1px solid var(--border);
-      background: #262626;
-      color: var(--text);
-      padding: 8px 12px;
-      border-radius: 12px;
-      cursor: pointer;
-    }
-    .btn:hover { background: #2c2c2c; }
-    #status { color: var(--muted); margin: 8px 0; }
-    #grid {
-      display: block;
-    }
-    .tile img { width: 100%; height: auto; display: block; border-radius: 8px; }
-    input[type=file] { display: none; }
-    .section { margin-bottom: 24px; }
-    .section-title {
-      font-weight: 500;
-      margin: 16px 2px 8px;
-      padding: 0;
-    }
-    .section-grid {
-      column-width: 220px;
-      column-gap: 8px;
-    }
-    .tile { break-inside: avoid; margin-bottom: 8px; }
-    .section-grid img { width: 100%; height: auto; display: block; border-radius: 8px; }
-    .albums-header { margin-top: 16px; color: var(--muted); }
-    .albums-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
-    .albums-list button { text-align: left; border: 0; background: transparent; color: var(--text); padding: 6px 8px; border-radius: 8px; cursor: pointer; }
-    .albums-list button:hover { background: #232323; }
-    .uploads-panel { margin: 12px 0; }
-    .uploads-list { display: flex; flex-wrap: wrap; gap: 6px; }
-    .upload-chip { border: 1px solid var(--border); border-radius: 16px; padding: 6px 10px; font-size: 12px; color: var(--muted); }
-    .context-menu { position: absolute; background: #262626; border: 1px solid var(--border); border-radius: 8px; min-width: 180px; z-index: 1000; }
-    .context-menu button { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: var(--text); padding: 10px 12px; cursor: pointer; }
-    .context-menu button:hover { background: #2c2c2c; }
-  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600&family=Roboto:wght@300;400;500;700&display=swap"
+    rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="stylesheet" href="/static/styles/index.css">
 </head>
+
 <body>
-  <div class="app">
-    <aside class="sidebar">
-      <div class="logo">Photos</div>
-      <div class="nav" id="nav">
-        <button id="navAllPhotos">All Photos</button>
-        <div class="albums-header">Albums</div>
-        <div class="albums-list" id="albumList"></div>
-        <button id="addAlbumBtn">+ add new album</button>
-        <button id="navBin">Bin</button>
-      </div>
+  <div id="toastContainer" class="toast-container"></div>
+  <div class="app" id="app">
+    <div class="loader-overlay" id="globalLoader">
+      <div class="spinner"></div>
+      <div class="loader-text" id="loaderText">Processing...</div>
+    </div>
+
+    <aside class="sidebar" id="sidebar">
+      <nav class="nav">
+        <button class="nav-item active" id="navAllPhotos">
+          <i data-lucide="image"></i>
+          All Photos
+        </button>
+        <button class="nav-item" id="navFavorites">
+          <i data-lucide="heart"></i>
+          Favorites
+        </button>
+        <div class="sidebar-divider"></div>
+        <div class="sidebar-section-title">Albums</div>
+        <div id="albumList"></div>
+        <button class="add-album-btn" id="addAlbumBtn">+ New Album</button>
+        <div class="sidebar-divider"></div>
+        <button class="nav-item" id="navSharedWithMe">
+          <i data-lucide="users"></i>
+          Shared with me
+        </button>
+        <button class="nav-item" id="navSharedByMe">
+          <i data-lucide="share-2"></i>
+          Shared by me
+        </button>
+        <button class="nav-item" id="navStorage">
+          <i data-lucide="hard-drive"></i>
+          Storage
+        </button>
+        <button class="nav-item" id="navBin">
+          <i data-lucide="trash-2"></i>
+          Bin
+        </button>
+      </nav>
     </aside>
+
     <header class="header">
+      <button class="hamburger" id="hamburgerBtn">
+        <i data-lucide="menu"></i>
+      </button>
       <div class="logo">roturPhotos</div>
       <div class="search">
-        <input type="text" id="searchInput" placeholder="Search">
-        <button class="btn" id="searchBtn">Search</button>
+        <i data-lucide="search" class="search-icon"></i>
+        <input type="text" id="searchInput" placeholder="Search photos...">
       </div>
-      <img class="avatar" src="https://avatars.rotur.dev/{{.Username}}" alt="avatar">
+      <div class="header-actions">
+        <div class="user-menu" id="userMenu">
+          <img class="avatar" id="userAvatar" src="https://avatars.rotur.dev/{{.Username}}" alt="avatar">
+          <div class="user-dropdown" id="userDropdown">
+            <div class="user-dropdown-header">
+              <img class="user-dropdown-avatar" src="https://avatars.rotur.dev/{{.Username}}" alt="avatar">
+              <div class="user-dropdown-info">
+                <div class="user-dropdown-name">{{.Username}}</div>
+                <div class="user-dropdown-tier tier-{{.Subscription}}">{{.Subscription}}</div>
+              </div>
+            </div>
+            <div class="user-dropdown-divider"></div>
+            <button class="user-dropdown-item user-dropdown-logout" id="logoutBtn" onclick="handleLogoutClick()">
+              <i data-lucide="log-out"></i>
+              Sign out
+            </button>
+          </div>
+        </div>
+      </div>
     </header>
+
     <main class="content">
-      <div class="toolbar">
-        <input type="file" id="fileInput" accept="image/*" multiple>
-        <button class="btn" id="uploadBtn">Upload</button>
+      <div class="toolbar" id="toolbar">
+        <div class="toolbar-title" id="viewTitle">Photos</div>
+        <button class="btn" id="uploadBtn">
+          <i data-lucide="upload"></i>
+          Upload
+        </button>
+        <button class="btn btn-danger" id="emptyBinBtn" style="display: none;">
+          <i data-lucide="trash-2"></i>
+          Empty Bin
+        </button>
+        <button class="btn-icon" id="selectAllBtn" title="Select All">
+          <i data-lucide="square"></i>
+        </button>
       </div>
-      <div class="uploads-panel" id="uploadsPanel" style="display:none;">
-        <div class="uploads-list" id="uploadsList"></div>
+
+      <div class="status" id="status"></div>
+
+      <div class="grid-container" id="gridContainer">
+        <div id="grid"></div>
       </div>
-      <div id="status"></div>
-      <div id="grid"></div>
-      <div id="contextMenu" class="context-menu" style="display:none;"></div>
     </main>
   </div>
+  <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
 
-  <script src="/static/scripts/dashboard.js" async defer></script>
+  <div class="uploads-panel hidden" id="uploadsPanel">
+    <div class="uploads-card">
+      <div class="uploads-header">
+        <div class="uploads-title">Uploading Photos</div>
+        <button class="uploads-close" id="closeUploads">&times;</button>
+      </div>
+      <div class="uploads-list" id="uploadsList"></div>
+    </div>
+  </div>
+
+  <div class="context-menu" id="contextMenu" style="display:none;"></div>
+
+  <div class="lightbox" id="lightbox">
+    <div class="lightbox-header">
+      <button class="lightbox-close" id="lightboxClose">
+        <i data-lucide="x"></i>
+      </button>
+    </div>
+    <div class="lightbox-content">
+      <button class="lightbox-nav prev" id="lightboxPrev">
+        <i data-lucide="chevron-left"></i>
+      </button>
+      <img class="lightbox-image" id="lightboxImage" src="" alt="">
+      <button class="lightbox-nav next" id="lightboxNext">
+        <i data-lucide="chevron-right"></i>
+      </button>
+    </div>
+    <div class="lightbox-info">
+      <div class="lightbox-metadata" id="lightboxMetadata"></div>
+      <div class="lightbox-actions">
+        <button class="btn-icon" id="lightboxShare" title="Share">
+          <i data-lucide="share"></i>
+        </button>
+        <button class="btn-icon" id="lightboxRotateRight" title="Rotate Right">
+          <i data-lucide="rotate-cw"></i>
+        </button>
+        <button class="btn-icon" id="lightboxRotateLeft" title="Rotate Left">
+          <i data-lucide="rotate-ccw"></i>
+        </button>
+        <button class="btn-icon" id="lightboxFavorite" title="Favorite">
+          <i data-lucide="heart"></i>
+        </button>
+        <button class="btn-icon" id="lightboxDelete" title="Delete">
+          <i data-lucide="trash-2"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="readonly-banner hidden" id="readonlyBanner">
+    <span>Your subscription has expired. You can view your photos, but uploading is disabled.</span>
+    <a href="https://ko-fi.com/mistium" target="_blank" class="readonly-btn">Upgrade</a>
+  </div>
+
+  <div class="subscription-overlay" id="subscriptionOverlay">
+    <div class="sub-card">
+      <div class="sub-title">Subscription Required</div>
+      <div class="sub-text">
+        roturPhotos is a premium service for storing and organizing your memories.
+        <br><br>
+        Please upgrade to <strong>Drive</strong> or <strong>Pro</strong> to access the dashboard and manage your photos.
+      </div>
+      <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
+        <a href="https://ko-fi.com/mistium" target="_blank" class="sub-btn">
+          <i data-lucide="coffee"></i>
+          Get Subscription
+        </a>
+        <button class="btn btn-secondary" id="subLogoutBtn" style="padding: 12px 24px;" onclick="handleLogoutClick()">
+          <i data-lucide="log-out"></i>
+          Sign out
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="selection-bar" id="selectionBar">
+    <div class="selection-count" id="selectionCount">0 selected</div>
+    <select class="btn btn-secondary" id="selectAddToAlbumDropdown" style="width: 160px;">
+      <option value="" disabled selected>Add to album</option>
+      <option value="NEW_ALBUM">+ Create new...</option>
+    </select>
+    <button class="btn btn-secondary" id="selectDelete">Delete</button>
+    <button class="btn btn-secondary" id="selectDeselect">Deselect all</button>
+  </div>
+
+  <input type="file" id="fileInput" accept="image/*" multiple>
+
+  <div class="subscription-overlay" id="genericModal">
+    <div class="sub-card">
+      <div class="sub-title" id="modalTitle"></div>
+      <div class="sub-text" id="modalMessage"></div>
+      <div id="modalInputContainer" style="display:none; margin-bottom: 24px;">
+        <input type="text" id="modalInput" class="search"
+          style="width: 100%; max-width: 100%; border: 1px solid var(--border-color); background: var(--bg-secondary);"
+          placeholder="">
+      </div>
+      <div id="modalSelectContainer" style="display:none; margin-bottom: 24px;">
+        <select id="modalSelect"></select>
+      </div>
+      <div style="display: flex; gap: 12px; justify-content: center;">
+        <button class="btn btn-secondary" id="modalCancel">Cancel</button>
+        <button class="btn" id="modalConfirm">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    lucide.createIcons();
+  </script>
+  <script type="module" src="/static/scripts/dashboard.js"></script>
 </body>
 
 </html>

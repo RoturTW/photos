@@ -7,6 +7,17 @@ def randomString(int length) string (
     return result
 )
 
+def calculateFileHash(string path) string (
+    string hash = ""
+    raw("f, err := os.Open(path)")
+    if err == null (
+        raw("h := md5.New()")
+        raw("if _, err := io.Copy(h, f); err == nil { hash = hex.EncodeToString(h.Sum(nil)) }")
+        raw("f.Close()")
+    )
+    return hash
+)
+
 def noCORS(*gin.Context c) (
     c.Header("Access-Control-Allow-Origin", "*")
     string origin = c.GetHeader("Origin")
@@ -29,12 +40,26 @@ def getAble(string username) object (
     username = username.toLower()
     object profile = userData[username]
     if profile == null (
-        return { canAccess: false, maxUpload: "0" }
+        if fs.Exists("db/" ++ username ++ "/user.json") (
+            string data = fs.ReadFile("db/" ++ username ++ "/user.json")
+            profile = data.JsonParse()
+        ) else (
+            return { canAccess: false, maxUpload: "0" }
+        )
     )
     string subscription = profile.subscription.toStr().toLower()
+    number quota = 0
+    if subscription == "drive" (
+        quota = 104857600
+    ) else if subscription == "pro" (
+        quota = 1073741824
+    ) else if subscription == "max" (
+        quota = 10737418240
+    )
+    
     return {
-        canAccess: (subscription == "drive" or subscription == "pro" or subscription == "max"),
-        maxUpload: "15000000"
+        canAccess: (quota > 0),
+        storageQuota: quota
     }
 )
 
@@ -62,6 +87,22 @@ def readUserImages(string username) array (
     )
     array arr = data.JsonParse()
     return arr
+)
+
+def enrichImagesWithSharing(string username, array images) array (
+    object sharesObj = readUserShares(username)
+    array shares = sharesObj.shares
+    for i images.len (
+        object img = images[i]
+        for j shares.len (
+            object share = shares[j]
+            if share.imageId.toStr() == img.id.toStr() (
+                img["sharedWith"] = share.sharedWith
+                img["isPublic"] = share.isPublic
+            )
+        )
+    )
+    return images
 )
 
 def writeUserImages(string username, array arr) bool (
@@ -142,8 +183,9 @@ def addAlbum(string username, string name) object (
         list.append(name)
         albums.albums = list
     )
-    if !albums.items[name] (
-        albums.items[name] = []
+    if albums.items[name] == null (
+        object items = albums.items
+        items[name] = []
     )
     writeUserAlbums(username, albums)
     return albums
@@ -167,10 +209,11 @@ def removeAlbumDef(string username, string name) object (
 
 def addImageToAlbum(string username, string name, string id) object (
     object albums = readUserAlbums(username)
-    if !albums.items[name] (
-        albums.items[name] = []
+    object items = albums.items
+    if albums.items[name] == null (
+        items[name] = []
     )
-    array ids = albums.items[name]
+    array ids = items[name]
     bool exists = false
     for i ids.len (
         if ids[i].toStr() == id (
@@ -179,7 +222,7 @@ def addImageToAlbum(string username, string name, string id) object (
     )
     if !exists (
         ids.append(id)
-        albums.items[name] = ids
+        items[name] = ids
         writeUserAlbums(username, albums)
     )
     return albums
@@ -194,7 +237,8 @@ def removeImageFromAlbum(string username, string name, string id) object (
             out.append(ids[i])
         )
     )
-    albums.items[name] = out
+    object items = albums.items
+    items[name] = out
     writeUserAlbums(username, albums)
     return albums
 )
@@ -229,4 +273,267 @@ def writeUserBin(string username, array arr) bool (
     string path = userBinPath(username)
     string out = arr.toStr()
     return fs.WriteFile(path, out)
+)
+
+def calculateStorageStats(string username) object (
+    string path = "db/" ++ username.toLower() ++ "/blob"
+    if !fs.Exists(path) (
+        return { totalBytes: 0, imageCount: 0, largestImages: [], binBytes: 0, duplicateGroups: [] }
+    )
+    array files = fs.ReadDir(path)
+    number totalBytes = 0
+    int imageCount = 0
+    array entries = []
+    object sizeGroups = {}
+    
+    for i files.len (
+        string name = files[i].toStr()
+        if name.endsWith(".jpg") (
+            string fpath = path ++ "/" ++ name
+            object stat = fs.GetStat(fpath)
+            number size = stat.size.toNum()
+            totalBytes = totalBytes + size
+            imageCount = imageCount + 1
+            string id = name.trim(1, -5)
+            
+            string sizeStr = size.toStr()
+            if sizeGroups[sizeStr] == null (
+                sizeGroups[sizeStr] = []
+            )
+            array sg = sizeGroups[sizeStr]
+            sg.append({ id: id, path: fpath })
+            sizeGroups[sizeStr] = sg
+            
+            entries.append({ id: id, bytes: size, path: fpath })
+        )
+    )
+    
+    // Detect duplicates
+    object hashGroups = {}
+    array duplicateGroups = []
+    
+    array sizeKeys = sizeGroups.getKeys()
+    for i sizeKeys.len (
+        string sKey = sizeKeys[i]
+        array group = sizeGroups[sKey]
+        if group.len > 1 (
+            for j group.len (
+                object it = group[j]
+                string h = calculateFileHash(it.path.toStr())
+                if hashGroups[h] == null (
+                    hashGroups[h] = []
+                )
+                array hg = hashGroups[h]
+                hg.append(it.id.toStr())
+                hashGroups[h] = hg
+            )
+        )
+    )
+    
+    array hashKeys = hashGroups.getKeys()
+    for i hashKeys.len (
+        string hKey = hashKeys[i]
+        array group = hashGroups[hKey]
+        if group.len > 1 (
+            duplicateGroups.append({ hash: hKey, ids: group })
+        )
+    )
+    
+    // Sort entries by size descending
+    int n = entries.len
+    for i n (
+        for j (n - i - 1) (
+            if entries[j].bytes.toNum() < entries[j + 1].bytes.toNum() (
+                object tmp = entries[j]
+                entries[j] = entries[j + 1]
+                entries[j + 1] = tmp
+            )
+        )
+    )
+    
+    array largest = []
+    int limit = 10
+    if n < limit (
+        limit = n
+    )
+    for i limit (
+        largest.append({ id: entries[i].id, bytes: entries[i].bytes })
+    )
+    
+    string binPath = "db/" ++ username.toLower() ++ "/bin"
+    number binBytes = 0
+    if fs.Exists(binPath) (
+        array binFiles = fs.ReadDir(binPath)
+        for i binFiles.len (
+            string bname = binFiles[i].toStr()
+            if bname.endsWith(".jpg") (
+                string bfpath = binPath ++ "/" ++ bname
+                object bstat = fs.GetStat(bfpath)
+                binBytes = binBytes + bstat.size.toNum()
+            )
+        )
+    )
+    
+    object fileSizes = {}
+    for i entries.len (
+        fileSizes[entries[i].id.toStr()] = entries[i].bytes
+    )
+    
+    return {
+        totalBytes: totalBytes,
+        imageCount: imageCount,
+        largestImages: largest,
+        binBytes: binBytes,
+        duplicateGroups: duplicateGroups,
+        fileSizes: fileSizes
+    }
+)
+
+def userSharesPath(string username) string (
+    return "db/" ++ username.toLower() ++ "/shares.json"
+)
+
+def ensureUserShares(string username) (
+    string dir = "db/" ++ username.toLower()
+    if !fs.Exists(dir) (
+        fs.MkdirAll(dir)
+    )
+    string path = userSharesPath(username)
+    if !fs.Exists(path) (
+        fs.WriteFile(path, "{ \"shares\": [] }")
+    )
+)
+
+def readUserShares(string username) object (
+    ensureUserShares(username)
+    string path = userSharesPath(username)
+    string data = fs.ReadFile(path)
+    if data == "" (
+        return { shares: [] }
+    )
+    object obj = data.JsonParse()
+    if obj.shares == null (
+        obj.shares = []
+    )
+    return obj
+)
+
+def writeUserShares(string username, object sharesObj) bool (
+    string path = userSharesPath(username)
+    return fs.WriteFile(path, sharesObj.toStr())
+)
+
+def addShare(string owner, string imageId, string targetUsername) object (
+    object sharesObj = readUserShares(owner)
+    array shares = sharesObj.shares
+    
+    bool found = false
+    for i shares.len (
+        object share = shares[i]
+        if share.imageId.toStr() == imageId (
+            array sharedWith = share.sharedWith
+            bool exists = false
+            for j sharedWith.len (
+                if sharedWith[j].toStr().toLower() == targetUsername.toLower() (
+                    exists = true
+                )
+            )
+            if !exists (
+                sharedWith.append(targetUsername.toLower())
+                share.sharedWith = sharedWith
+            )
+            found = true
+        )
+    )
+    
+    if !found (
+        shares.append({ imageId: imageId, sharedWith: [targetUsername.toLower()] })
+    )
+    
+    sharesObj.shares = shares
+    writeUserShares(owner, sharesObj)
+    return sharesObj
+)
+
+def removeShare(string owner, string imageId, string targetUsername) object (
+    object sharesObj = readUserShares(owner)
+    array shares = sharesObj.shares
+    array newShares = []
+    
+    for i shares.len (
+        object share = shares[i]
+        if share.imageId.toStr() == imageId (
+            array sharedWith = share.sharedWith
+            array newSharedWith = []
+            for j sharedWith.len (
+                if sharedWith[j].toStr().toLower() != targetUsername.toLower() (
+                    newSharedWith.append(sharedWith[j])
+                )
+            )
+            if newSharedWith.len > 0 (
+                share.sharedWith = newSharedWith
+                newShares.append(share)
+            )
+        ) else (
+            newShares.append(share)
+        )
+    )
+    
+    sharesObj.shares = newShares
+    writeUserShares(owner, sharesObj)
+    return sharesObj
+)
+
+def setPublicShare(string owner, string imageId, bool isPublic) object (
+    object sharesObj = readUserShares(owner)
+    array shares = sharesObj.shares
+    bool found = false
+    for i shares.len (
+        object share = shares[i]
+        if share.imageId.toStr() == imageId (
+            share["isPublic"] = isPublic
+            found = true
+        )
+    )
+    if !found and isPublic == true (
+        shares.append({ imageId: imageId, sharedWith: [], isPublic: true })
+    )
+    sharesObj.shares = shares
+    writeUserShares(owner, sharesObj)
+    return sharesObj
+)
+
+def getSharedWithMe(string username) array (
+    array results = []
+    string dbPath = "db"
+    if !fs.Exists(dbPath) (
+        return results
+    )
+    array dirs = fs.ReadDir(dbPath)
+    for i dirs.len (
+        string ownerDir = dirs[i].toStr()
+        string sharesPath = dbPath ++ "/" ++ ownerDir ++ "/shares.json"
+        if fs.Exists(sharesPath) (
+            string data = fs.ReadFile(sharesPath)
+            if data != "" (
+                object sharesObj = data.JsonParse()
+                array shares = sharesObj.shares
+                if shares != null (
+                    for j shares.len (
+                        object share = shares[j]
+                        array sharedWith = share.sharedWith
+                        for k sharedWith.len (
+                            if sharedWith[k].toStr().toLower() == username.toLower() (
+                                results.append({
+                                    owner: ownerDir,
+                                    imageId: share.imageId
+                                })
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    )
+    return results
 )

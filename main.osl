@@ -6,13 +6,15 @@ import "math/rand"
 import "os"
 import "time"
 import "github.com/gin-gonic/gin"
-import "github.com/joho/godotenv as godotenv"
 import "github.com/rwcarlsen/goexif/exif"
+import "crypto/md5"
+import "io"
+import "encoding/hex"
 
 import "./middleware.osl"
 import "./pages.osl"
-import "./handlers.osl"
 import "./utils.osl"
+import "./handlers.osl"
 
 object sessions = {}
 object userData = {}
@@ -24,9 +26,10 @@ def up(*gin.Context c) (
 )
 
 def main() (
-    string home = os.Getenv("HOME")
-    godotenv.Overload(home ++ "/Documents/.env")
-    godotenv.Load()
+    if fs.Exists("db/sessions.json") (
+        string data = fs.ReadFile("db/sessions.json")
+        sessions = data.JsonParse()
+    )
 
     r := gin.Default()
     r.Use(noCORS)
@@ -39,13 +42,20 @@ def main() (
 
     api := r.Group("/api")
     api.GET("/auth", handleAuth)
+    api.GET("/logout", handleLogout)
     api.GET("/able", requireSession, handleAble)
+    api.GET("/storage", requireSession, handleStorage)
     api.GET("/search", requireSession, handleSearch)
     api.GET("/share/mine", requireSession, handleShareMine)
     api.GET("/share/others", requireSession, handleShareOthers)
+    api.GET("/share/info/:id", requireSession, handleShareInfo)
     api.PATCH("/share/:id", requireSession, handleSharePatch)
+    api.POST("/share", requireSession, handleShareCreate)
+    api.GET("/shared/:owner/:id", handleSharedImage)
+    api.GET("/shared/info/:owner/:id", handleSharedImageInfo)
 
     images := api.Group("/images")
+    images.GET("/all", requireSession, handleAllImages)
     images.GET("/recent", requireSession, handleRecentImages)
     images.GET("/:year", requireSession, handleYearImages)
     images.GET("/:year/:month", requireSession, handleMonthImages)
@@ -55,6 +65,7 @@ def main() (
     api.POST("/image", requireSession, handleUpload)
     image.DELETE("/:id", requireSession, handleDeleteImage)
     image.GET("/:id", requireSession, handleId)
+    image.POST("/:id/rotate", requireSession, handleImageRotate)
     image.GET("/preview/:id", requireSession, handlePreview)
 
     albums := api.Group("/albums")
@@ -69,7 +80,10 @@ def main() (
     bin.GET("", requireSession, handleBinList)
     bin.POST("/restore/:id", requireSession, handleBinRestore)
     bin.DELETE("/:id", requireSession, handleBinDelete)
+    bin.POST("/empty", requireSession, handleBinEmpty)
     bin.GET("/preview/:id", requireSession, handleBinPreview)
+
+    r.GET("/:username/:id", handleDirectImage)
 
     r.Run(":5606")
 )

@@ -26,7 +26,7 @@ window.onload = async function () {
 
   const urlParams = new URLSearchParams(window.location.search);
   const token = urlParams.get('token');
-  const key = "rotur-gate";
+  const key = "rotur-photos";
 
   if (token) {
     const validator = await fetch("https://social.rotur.dev/generate_validator?key=" + encodeURIComponent(key) + "&auth=" + encodeURIComponent(token))

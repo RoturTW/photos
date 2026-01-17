@@ -1,511 +1,417 @@
-const state = {
-  able: null,
-  items: [],
-  isUploading: false,
-  observer: null,
-  loadObserver: null,
-  scrollHooked: false,
-  uploads: [],
-  albums: [],
-  view: "recent",
-  groups: [],
-  renderIndex: 0,
-};
+import { state } from './modules/state.js';
+import { qs } from './modules/utils.js';
+import {
+  apiJSON, apiLogout, apiUpload, apiDelete, apiBinRestore,
+  apiAlbumCreate, apiAlbumAdd, apiRotateImage
+} from './modules/api.js';
+import {
+  modalConfirm, modalPrompt, modalSelect,
+  showLoader, hideLoader, showToast,
+  setStatus, showUploadsPanel, copyLink
+} from './modules/ui.js';
+import { render } from './modules/gallery.js';
+import {
+  loadRecent, loadAll, loadFavorites, loadBin, loadSharedWithMe, loadSharedByMe,
+  loadAlbumsSidebar, refreshCurrentView, doSearch,
+  saveFavorites, loadFavoritesState
+} from './modules/actions.js';
+import {
+  openLightbox, closeLightbox, navigateLightbox, updateLightboxFavoriteBtn, refreshRotatedImage
+} from './modules/lightbox.js';
+import { loadStorage } from './modules/storage.js';
+import { openShareManagement } from './modules/sharing.js';
 
-function qs(id) {
-  return document.getElementById(id);
+window.toggleSidebar = toggleSidebar;
+
+function toggleSelection(id) {
+  if (state.selectedItems.has(id)) {
+    state.selectedItems.delete(id);
+  } else {
+    state.selectedItems.add(id);
+  }
+  updateSelectionUI();
+  updateSelectionBar();
 }
 
-async function apiJSON(url) {
-  const r = await fetch(url, { credentials: "include" });
-  if (!r.ok) return null;
-  return r.json();
-}
-
-async function apiUpload(buffer) {
-  const r = await fetch("/api/image", {
-    method: "POST",
-    body: buffer,
-    headers: { "Content-Type": "application/octet-stream" },
-    credentials: "include",
+function updateSelectionUI() {
+  document.querySelectorAll(".photo-card").forEach(card => {
+    const id = card.dataset.id;
+    if (state.selectedItems.has(id)) card.classList.add("selected");
+    else card.classList.remove("selected");
   });
-  if (!r.ok) return null;
-  return r.json();
 }
 
-async function apiAlbums() {
-  const r = await fetch("/api/albums", { credentials: "include" });
-  if (!r.ok) return [];
-  return r.json();
-}
+async function updateSelectionBar() {
+  const bar = qs("selectionBar");
+  const count = qs("selectionCount");
+  if (!bar || !count) return;
 
-async function apiAlbumCreate(name) {
-  const r = await fetch("/api/albums?name=" + encodeURIComponent(name), {
-    method: "POST",
-    credentials: "include",
-  });
-  if (!r.ok) return [];
-  return r.json();
-}
+  const num = state.selectedItems.size;
+  count.textContent = num === 1 ? "1 item selected" : `${num} items selected`;
 
-async function apiAlbumImages(name) {
-  const r = await fetch("/api/albums/" + encodeURIComponent(name), { credentials: "include" });
-  if (!r.ok) return [];
-  return r.json();
-}
-
-async function apiAlbumAdd(name, id) {
-  const r = await fetch("/api/albums/" + encodeURIComponent(name) + "/add?id=" + encodeURIComponent(id), {
-    method: "POST",
-    credentials: "include",
-  });
-  return r.ok;
-}
-
-async function apiBinList() {
-  const r = await fetch("/api/bin", { credentials: "include" });
-  if (!r.ok) return [];
-  return r.json();
-}
-
-async function apiBinRestore(id) {
-  const r = await fetch("/api/bin/restore/" + encodeURIComponent(id), { method: "POST", credentials: "include" });
-  return r.ok;
-}
-
-async function apiBinDelete(id) {
-  const r = await fetch("/api/bin/" + encodeURIComponent(id), { method: "DELETE", credentials: "include" });
-  return r.ok;
-}
-
-async function apiDelete(id) {
-  const r = await fetch("/api/image/" + encodeURIComponent(id), {
-    method: "DELETE",
-    credentials: "include",
-  });
-  return r.ok;
-}
-
-function setStatus(msg) {
-  const el = qs("status");
-  if (el) el.textContent = msg || "";
-}
-
-function ensureObserver() {
-  if (state.observer) return;
-  state.observer = new IntersectionObserver(entries => {
-    for (const e of entries) {
-      if (e.isIntersecting) {
-        const img = e.target;
-        const src = img.dataset.src;
-        if (src && !img.src) {
-          img.src = src;
-        }
-        state.observer.unobserve(img);
-      }
-    }
-  }, { rootMargin: "200px" });
-}
-
-function monthName(m) {
-  return ["January","February","March","April","May","June","July","August","September","October","November","December"][m] || "";
-}
-
-function groupByMonth(items) {
-  const groups = new Map();
-  for (const it of items || []) {
-    const ts = Number(it.timestamp || 0);
-    const d = new Date(ts);
-    const y = d.getFullYear();
-    const m = d.getMonth();
-    const key = y + "-" + m;
-    if (!groups.has(key)) groups.set(key, { year: y, month: m, items: [] });
-    groups.get(key).items.push(it);
-  }
-  const out = Array.from(groups.values());
-  out.sort((a,b) => (b.year - a.year) || (b.month - a.month));
-  for (const g of out) {
-    g.items.sort((a,b) => Number(b.timestamp||0) - Number(a.timestamp||0));
-    g.title = monthName(g.month) + " " + g.year;
-  }
-  return out;
-}
-
-function render(items) {
-  state.items = (items || []).slice().sort((a,b) => Number(b.timestamp||0) - Number(a.timestamp||0));
-  state.groups = groupByMonth(state.items);
-  state.renderIndex = 0;
-  const grid = qs("grid");
-  if (!grid) return;
-  grid.innerHTML = "";
-  ensureObserver();
-  // create or reuse sentinel
-  let sentinel = document.getElementById("loadSentinel");
-  if (!sentinel) {
-    sentinel = document.createElement("div");
-    sentinel.id = "loadSentinel";
-    sentinel.style.height = "1px";
-  }
-  grid.appendChild(sentinel);
-  ensureLoadObserver();
-  renderMore();
-}
-
-const GROUP_BATCH = 6;
-
-function renderMore() {
-  const grid = qs("grid");
-  if (!grid || !state.groups) return;
-  const end = Math.min(state.renderIndex + GROUP_BATCH, state.groups.length);
-  for (let gi = state.renderIndex; gi < end; gi++) {
-    const g = state.groups[gi];
-    const sec = document.createElement("section");
-    sec.className = "section";
-    const title = document.createElement("div");
-    title.className = "section-title";
-    title.textContent = g.title;
-    const sg = document.createElement("div");
-    sg.className = "section-grid";
-    for (const it of g.items) {
-      const wrap = document.createElement("div");
-      wrap.className = "tile";
-      if (it.width && it.height) {
-        wrap.style.aspectRatio = it.width + " / " + it.height;
-      }
-      const img = document.createElement("img");
-      img.loading = "lazy";
-      img.style.width = "100%";
-      img.style.height = "100%";
-      img.style.objectFit = "cover";
-      const base = state.view === "bin" ? "/api/bin/preview/" : "/api/image/preview/";
-      img.dataset.src = base + encodeURIComponent(it.id);
-      if (!state.isUploading) {
-        state.observer.observe(img);
-      }
-      wrap.appendChild(img);
-      wrap.onclick = () => {
-        const url = state.view === "bin" ? ("/api/bin/preview/" + encodeURIComponent(it.id)) : ("/api/image/" + encodeURIComponent(it.id));
-        window.open(url, "_blank");
-      };
-      wrap.oncontextmenu = e => openContextMenu(e, it.id);
-      sg.appendChild(wrap);
-    }
-    sec.appendChild(title);
-    sec.appendChild(sg);
-    if (gi === end - 1) {
-      const next = document.createElement("div");
-      next.style.height = "1px";
-      next.id = "groupSentinel-" + gi;
-      sec.appendChild(next);
-      if (state.loadObserver) state.loadObserver.observe(next);
-    }
-    const sentinel = document.getElementById("loadSentinel");
-    grid.insertBefore(sec, sentinel);
-  }
-  state.renderIndex = end;
-}
-
-function ensureLoadObserver() {
-  const rootEl = document.querySelector(".content") || null;
-  if (!state.loadObserver) {
-    state.loadObserver = new IntersectionObserver(entries => {
-      for (const e of entries) {
-        if (e.isIntersecting) {
-          if (state.renderIndex < state.groups.length) {
-            renderMore();
-          }
-        }
-      }
-    }, { root: rootEl, rootMargin: "800px" });
-  }
-  const sentinel = document.getElementById("loadSentinel");
-  if (sentinel && state.loadObserver) state.loadObserver.observe(sentinel);
-  if (!state.scrollHooked) {
-    const content = document.querySelector(".content");
-    const target = content || window;
-    target.addEventListener("scroll", checkNearBottom, { passive: true });
-    state.scrollHooked = true;
-  }
-}
-
-function checkNearBottom() {
-  const grid = qs("grid");
-  if (!grid || !state.groups) return;
-  const content = document.querySelector(".content");
-  if (content) {
-    const scrolled = content.scrollTop + content.clientHeight;
-    const total = content.scrollHeight;
-    if (total - scrolled < 1200 && state.renderIndex < state.groups.length) {
-      renderMore();
+  if (num > 0) {
+    bar.classList.add("active");
+    const dropdown = qs("selectAddToAlbumDropdown");
+    if (dropdown) {
+      const albums = await apiJSON("/api/albums");
+      while (dropdown.options.length > 2) dropdown.remove(2);
+      (albums || []).forEach(a => {
+        const opt = document.createElement("option");
+        opt.value = opt.textContent = a;
+        dropdown.appendChild(opt);
+      });
     }
   } else {
-    const scrolled = window.scrollY + window.innerHeight;
-    const total = document.documentElement.scrollHeight;
-    if (total - scrolled < 1200 && state.renderIndex < state.groups.length) {
-      renderMore();
+    bar.classList.remove("active");
+  }
+}
+
+function clearSelection() {
+  state.selectedItems.clear();
+  updateSelectionUI();
+  updateSelectionBar();
+}
+
+function toggleFavorite(id) {
+  if (state.favorites.has(id)) state.favorites.delete(id);
+  else state.favorites.add(id);
+  saveFavorites();
+  updateFavoriteUI(id);
+}
+
+function updateFavoriteUI(id) {
+  const card = document.querySelector(`.photo-card[data-id="${id}"]`);
+  if (card) {
+    const btn = card.querySelector(".favorite-btn");
+    if (btn) {
+      if (state.favorites.has(id)) btn.classList.add("active");
+      else btn.classList.remove("active");
     }
   }
 }
 
-async function loadRecent() {
-  setStatus("Loading recent...");
-  const items = await apiJSON("/api/images/recent");
-  setStatus("");
-  if (items) {
-    state.view = "recent";
-    render(items);
+function updateUploadsList() {
+  const list = qs("uploadsList");
+  if (!list) return;
+  list.innerHTML = "";
+  for (const u of state.uploads) {
+    const item = document.createElement("div");
+    item.className = "upload-item";
+    item.innerHTML = `
+      <div class="upload-status ${u.status}"></div>
+      <div class="upload-details">
+        <div class="upload-name">${u.name}</div>
+        <div class="upload-progress-bar">
+          <div class="upload-progress-bar-inner" style="width: ${u.progress || 0}%"></div>
+        </div>
+      </div>
+      <div class="upload-progress">${u.status === 'uploading' ? Math.round(u.progress) + '%' : u.status.toUpperCase()}</div>
+    `;
+    list.appendChild(item);
   }
 }
 
-async function loadCurrentYear() {
-  const year = new Date().getFullYear();
-  setStatus("Loading " + year + "...");
-  const items = await apiJSON("/api/images/" + encodeURIComponent(year));
-  setStatus("");
-  if (items) {
-    state.view = "year:" + year;
-    render(items);
-  }
-}
+async function handleUploadAll(files) {
+  const list = files || (qs("fileInput") ? qs("fileInput").files : null);
+  if (!list || list.length === 0) return;
 
-async function loadAll() {
-  setStatus("Loading photos...");
-  const items = await apiJSON("/api/search?q=");
-  setStatus("");
-  if (items) {
-    state.view = "all";
-    render(items);
-  }
-}
+  const filesToUpload = Array.from(list).filter(f => f.type.startsWith("image/"));
+  if (!filesToUpload.length) return;
 
-async function loadBin() {
-  setStatus("Loading bin...");
-  const items = await apiBinList();
-  setStatus("");
-  if (items) {
-    state.view = "bin";
-    render(items);
-  }
-}
+  const total = filesToUpload.length;
+  state.uploads = filesToUpload.map(f => ({ name: f.name, status: "pending", progress: 0 }));
+  showUploadsPanel(true);
+  updateUploadsList();
 
-async function doSearch() {
-  const q = qs("searchInput").value.trim();
-  setStatus("Searching...");
-  const items = await apiJSON("/api/search?q=" + encodeURIComponent(q));
-  setStatus("");
-  if (items) render(items);
-}
-
-async function doUploadAll() {
-  const list = qs("fileInput").files;
-  const files = Array.from(list || []).filter(f => f && f.type && f.type.startsWith("image/"));
-  if (!files.length) return;
-  const max = state.able && state.able.maxUpload ? (parseInt(state.able.maxUpload, 10) || 0) : 0;
-  const total = files.length;
-  let done = 0;
-  let okCount = 0;
-  let failCount = 0;
   const CONCURRENCY = 8;
   let idx = 0;
-  state.isUploading = true;
-  setStatus("Uploading 0/" + total);
-  state.uploads = files.map(f => ({ name: f.name, status: "pending" }));
-  renderUploads();
-  showUploadsPanel(true);
+
   async function worker() {
     while (idx < total) {
       const i = idx++;
-      const f = files[i];
-      if (max && f.size > max) {
-        failCount++;
-        done++;
-        setStatus("Uploading " + done + "/" + total + " • ok " + okCount + " • fail " + failCount);
-        continue;
-      }
+      const f = filesToUpload[i];
+      state.uploads[i].status = "uploading";
+      updateUploadsList();
+
       try {
         const buf = await f.arrayBuffer();
-        state.uploads[i].status = "uploading";
-        renderUploads();
-        const res = await apiUpload(buf);
-        if (res && res.ok) {
-          okCount++;
+        const res = await apiUpload(buf, (p) => {
+          state.uploads[i].progress = p;
+          updateUploadsList();
+        });
+
+        if (res.ok) {
           state.uploads[i].status = "ok";
+          state.uploads[i].progress = 100;
+
+          // Add to current album if in album view
+          if (state.view && state.view.startsWith("album:")) {
+            const albumName = state.view.slice(6);
+            if (res.data && res.data.id) {
+              await apiAlbumAdd(albumName, res.data.id);
+            }
+          }
         } else {
-          failCount++;
           state.uploads[i].status = "fail";
+          state.uploads[i].error = res.error;
         }
       } catch (e) {
-        failCount++;
         state.uploads[i].status = "fail";
+        state.uploads[i].error = e.message;
       }
-      done++;
-      setStatus("Uploading " + done + "/" + total + " • ok " + okCount + " • fail " + failCount);
-      renderUploads();
+      updateUploadsList();
     }
   }
+
   const workers = [];
   for (let i = 0; i < Math.min(CONCURRENCY, total); i++) {
     workers.push(worker());
   }
   await Promise.all(workers);
-  state.isUploading = false;
-  setStatus("Uploaded " + okCount + "/" + total + " • failed " + failCount);
-  showUploadsPanel(false);
-  await loadRecent();
-}
 
-function showUploadsPanel(show) {
-  const panel = qs("uploadsPanel");
-  if (!panel) return;
-  panel.style.display = show ? "" : "none";
-}
-
-function renderUploads() {
-  const list = qs("uploadsList");
-  if (!list) return;
-  list.innerHTML = "";
-  for (const u of state.uploads) {
-    const chip = document.createElement("div");
-    chip.className = "upload-chip";
-    chip.textContent = u.name + " • " + u.status;
-    list.appendChild(chip);
-  }
-}
-
-async function loadAlbumsSidebar() {
-  const names = await apiAlbums();
-  state.albums = names || [];
-  const list = qs("albumList");
-  if (!list) return;
-  list.innerHTML = "";
-  for (const name of state.albums) {
-    const btn = document.createElement("button");
-    btn.textContent = name;
-    btn.onclick = async () => {
-      state.view = "album:" + name;
-      setStatus("Loading album...");
-      const items = await apiAlbumImages(name);
-      setStatus("");
-      render(items || []);
-    };
-    list.appendChild(btn);
-  }
+  setTimeout(() => showUploadsPanel(false), 3000);
+  refreshCurrentView();
 }
 
 function openContextMenu(e, id) {
-  e.preventDefault();
   const menu = qs("contextMenu");
   if (!menu) return;
   menu.innerHTML = "";
+
+  const item = state.items.find(i => i.id === id);
+  const isMine = item && !item.owner;
+
   const actions = [];
-  actions.push({ text: "Add to album…", fn: async () => {
-    const name = prompt("Album name");
-    if (name && name.trim()) {
-      await apiAlbumCreate(name.trim());
-      await apiAlbumAdd(name.trim(), id);
-      await loadAlbumsSidebar();
+
+  actions.push({
+    text: isMine ? "Share & Access" : "Copy Link",
+    icon: isMine ? "share-2" : "link",
+    fn: async () => {
+      if (isMine) openShareManagement(id);
+      else {
+        const myName = document.querySelector(".user-dropdown-name")?.textContent?.trim();
+        const path = item.owner ? `/${item.owner}/${id}` : `/${myName}/${id}`;
+        await copyLink(path);
+      }
     }
-  }});
-  if (state.view && state.view.startsWith("album:")) {
-    const name = state.view.slice(6);
-    actions.push({ text: "Remove from album", fn: async () => {
-      await apiAlbumRemove(name, id);
-      setStatus("Loading album...");
-      const items = await apiAlbumImages(name);
+  });
+
+  actions.push({
+    text: "Add to album...",
+    icon: "plus-square",
+    fn: async () => {
+      const albums = await apiJSON("/api/albums");
+      const options = (albums || []).map(a => ({ value: a, label: a }));
+      if (options.length === 0) {
+        const name = await modalPrompt("New Album", "Create one:", "Album Name");
+        if (name) { await apiAlbumCreate(name); await apiAlbumAdd(name, id); await loadAlbumsSidebar(); }
+        return;
+      }
+      const name = await modalSelect("Add to Album", "Select:", options);
+      if (name) { await apiAlbumAdd(name, id); showToast(`Added to ${name}`, "success"); }
+    }
+  });
+
+  actions.push({
+    text: state.favorites.has(id) ? "Remove Favorite" : "Favorite",
+    icon: "heart",
+    fn: () => toggleFavorite(id)
+  });
+
+  actions.push({
+    text: "Rotate Right",
+    icon: "rotate-cw",
+    fn: async () => {
+      setStatus("Rotating...");
+      const ok = await apiRotateImage(id, 90);
       setStatus("");
-      render(items || []);
-    }});
-  }
+      if (ok) { showToast("Rotated", "success"); await refreshRotatedImage(id, 90); }
+    }
+  });
+
   if (state.view !== "bin") {
-    actions.push({ text: "Move to bin", fn: async () => {
-      setStatus("Moving to bin...");
-      const ok = await apiDelete(id);
-      setStatus("");
-      if (!ok) return;
-      await refreshAfterDelete();
-    }});
+    actions.push({
+      text: "Move to Bin",
+      icon: "trash-2",
+      fn: async () => { if (await apiDelete(id)) { showToast("Moved to bin", "success"); refreshCurrentView(); } }
+    });
+  } else {
+    actions.push({
+      text: "Restore",
+      icon: "archive-restore",
+      fn: async () => { if (await apiBinRestore(id)) { showToast("Restored", "success"); refreshCurrentView(); } }
+    });
   }
-  for (const a of actions) {
+
+  actions.forEach(a => {
     const btn = document.createElement("button");
-    btn.textContent = a.text;
-    btn.onclick = async () => {
-      hideContextMenu();
-      await a.fn();
-    };
+    btn.innerHTML = `<i data-lucide="${a.icon || 'circle'}"></i><span>${a.text}</span>`;
+    btn.onclick = () => { a.fn(); menu.style.display = "none"; };
     menu.appendChild(btn);
-  }
+  });
+
+  menu.style.display = "block";
   menu.style.left = e.clientX + "px";
   menu.style.top = e.clientY + "px";
-  menu.style.display = "";
-  document.addEventListener("click", onDocClickOnce, { once: true });
-  window.addEventListener("scroll", hideContextMenu, { once: true });
+
+  lucide.createIcons();
+
+  const hide = (ev) => { if (!menu.contains(ev.target)) { menu.style.display = "none"; document.removeEventListener("mousedown", hide); } };
+  setTimeout(() => document.addEventListener("mousedown", hide), 10);
 }
 
-function hideContextMenu() {
-  const menu = qs("contextMenu");
-  if (menu) menu.style.display = "none";
-}
-
-function onDocClickOnce() {
-  hideContextMenu();
-}
-
-async function apiAlbumRemove(name, id) {
-  const r = await fetch("/api/albums/" + encodeURIComponent(name) + "/remove?id=" + encodeURIComponent(id), {
-    method: "POST",
-    credentials: "include",
-  });
-  return r.ok;
-}
-
-async function refreshAfterDelete() {
-  if (state.view === "recent") return loadRecent();
-  if (state.view === "all") return loadAll();
-  if (state.view && state.view.startsWith("album:")) {
-    const name = state.view.slice(6);
-    setStatus("Loading album...");
-    const items = await apiAlbumImages(name);
-    setStatus("");
-    return render(items || []);
+function toggleSidebar() {
+  const app = qs("app");
+  if (window.innerWidth <= 768) {
+    state.sidebarOpen = !state.sidebarOpen;
+    app.classList.toggle("sidebar-open", state.sidebarOpen);
+  } else {
+    state.sidebarCollapsed = !state.sidebarCollapsed;
+    app.classList.toggle("sidebar-collapsed", state.sidebarCollapsed);
   }
-  if (state.view && state.view.startsWith("year:")) {
-    const y = parseInt(state.view.slice(5), 10);
-    setStatus("Loading " + y + "...");
-    const items = await apiJSON("/api/images/" + encodeURIComponent(y));
-    setStatus("");
-    return render(items || []);
-  }
-  if (state.view === "bin") return loadBin();
-  return loadRecent();
 }
+
+async function checkDeepLink() {
+  const path = window.location.pathname;
+  const parts = path.split("/").filter(p => p);
+  if (parts.length === 2 && !["auth", "static", "api"].includes(parts[0])) {
+    const owner = parts[0];
+    const imageId = parts[1];
+    try {
+      const info = await apiJSON(`/api/shared/info/${encodeURIComponent(owner)}/${encodeURIComponent(imageId)}`);
+      if (info && info.id) {
+        if (!state.items.find(i => i.id === info.id)) { state.items.unshift(info); render(state.items); }
+        openLightbox(info.id);
+      }
+    } catch (err) { }
+  }
+}
+
+// Global Event Listeners for Module communication
+window.addEventListener('gallery:toggleFavorite', (e) => toggleFavorite(e.detail.id));
+window.addEventListener('gallery:contextMenu', (e) => openContextMenu(e.detail.event, e.detail.id));
+window.addEventListener('gallery:toggleSelection', (e) => toggleSelection(e.detail.id));
+window.addEventListener('gallery:openLightbox', (e) => openLightbox(e.detail.id));
 
 window.addEventListener("load", async () => {
+  loadFavoritesState();
   const able = await apiJSON("/api/able");
   state.able = able;
-  if (!able || !able.canAccess) {
-    setStatus("Not authorized");
-    return;
+
+  if (qs("logoutBtn")) qs("logoutBtn").onclick = async () => { await apiLogout(); window.location.href = "/auth"; };
+
+  if (qs("userAvatar")) {
+    const avatar = qs("userAvatar");
+    const dropdown = qs("userDropdown");
+    avatar.onclick = (e) => {
+      e.stopPropagation();
+      dropdown.classList.toggle("active");
+    };
+    document.addEventListener("mousedown", (e) => {
+      if (!avatar.contains(e.target) && !dropdown.contains(e.target)) {
+        dropdown.classList.remove("active");
+      }
+    });
   }
-  const fi = qs("fileInput");
-  if (fi) fi.onchange = doUploadAll;
-  const uploadBtn = qs("uploadBtn");
-  if (uploadBtn) uploadBtn.onclick = () => {
-    const fi = qs("fileInput");
-    if (fi) fi.click();
+  if (qs("navAllPhotos")) qs("navAllPhotos").onclick = loadAll;
+  if (qs("navFavorites")) qs("navFavorites").onclick = loadFavorites;
+  if (qs("navBin")) qs("navBin").onclick = loadBin;
+  if (qs("navSharedWithMe")) qs("navSharedWithMe").onclick = loadSharedWithMe;
+  if (qs("navSharedByMe")) qs("navSharedByMe").onclick = loadSharedByMe;
+  if (qs("navStorage")) qs("navStorage").onclick = loadStorage;
+  if (qs("uploadBtn")) qs("uploadBtn").onclick = () => qs("fileInput").click();
+  if (qs("fileInput")) qs("fileInput").onchange = () => handleUploadAll();
+
+  if (qs("hamburgerBtn")) qs("hamburgerBtn").onclick = toggleSidebar;
+
+  if (qs("lightboxClose")) qs("lightboxClose").onclick = closeLightbox;
+  if (qs("lightboxPrev")) qs("lightboxPrev").onclick = () => navigateLightbox(-1);
+  if (qs("lightboxNext")) qs("lightboxNext").onclick = () => navigateLightbox(1);
+  if (qs("lightboxFavorite")) qs("lightboxFavorite").onclick = () => {
+    const item = state.items[state.lightboxIndex];
+    if (item) { toggleFavorite(item.id); updateLightboxFavoriteBtn(); }
   };
-  qs("searchBtn").onclick = doSearch;
-  const navAllPhotos = qs("navAllPhotos");
-  if (navAllPhotos) navAllPhotos.onclick = loadAll;
-  const navBin = qs("navBin");
-  if (navBin) navBin.onclick = loadBin;
-  const addAlbumBtn = qs("addAlbumBtn");
-  if (addAlbumBtn) addAlbumBtn.onclick = async () => {
-    const name = prompt("Album name");
-    if (name && name.trim()) {
-      await apiAlbumCreate(name.trim());
-      await loadAlbumsSidebar();
+  if (qs("lightboxRotateRight")) qs("lightboxRotateRight").onclick = async () => {
+    const item = state.items[state.lightboxIndex];
+    if (item) { showLoader("Rotating..."); if (await apiRotateImage(item.id, 90)) await refreshRotatedImage(item.id, 90); hideLoader(); }
+  };
+  if (qs("lightboxRotateLeft")) qs("lightboxRotateLeft").onclick = async () => {
+    const item = state.items[state.lightboxIndex];
+    if (item) { showLoader("Rotating..."); if (await apiRotateImage(item.id, 270)) await refreshRotatedImage(item.id, 270); hideLoader(); }
+  };
+  if (qs("lightboxShare")) qs("lightboxShare").onclick = () => {
+    const item = state.items[state.lightboxIndex];
+    if (item) { if (item.owner) copyLink(`/${item.owner}/${item.id}`); else openShareManagement(item.id); }
+  };
+  if (qs("lightboxDelete")) qs("lightboxDelete").onclick = async () => {
+    const item = state.items[state.lightboxIndex];
+    if (item && await modalConfirm("Delete", "Delete photo?")) {
+      await apiDelete(item.id); closeLightbox(); refreshCurrentView();
     }
   };
+
+  if (qs("searchInput")) {
+    qs("searchInput").onkeypress = (e) => { if (e.key === 'Enter') doSearch(e.target.value); };
+  }
+
+  if (qs("selectDeselect")) qs("selectDeselect").onclick = clearSelection;
+  if (qs("selectAllBtn")) qs("selectAllBtn").onclick = () => {
+    if (state.selectedItems.size === state.items.length) clearSelection();
+    else { state.items.forEach(it => state.selectedItems.add(it.id)); updateSelectionUI(); updateSelectionBar(); }
+  };
+
+  if (qs("selectDelete")) qs("selectDelete").onclick = async () => {
+    if (state.selectedItems.size === 0) return;
+    if (await modalConfirm("Delete", `Delete ${state.selectedItems.size} items?`)) {
+      showLoader();
+      for (const id of state.selectedItems) await apiDelete(id);
+      hideLoader(); clearSelection(); refreshCurrentView();
+    }
+  };
+
+  if (qs("selectAddToAlbumDropdown")) {
+    qs("selectAddToAlbumDropdown").onchange = async (e) => {
+      const val = e.target.value;
+      if (!val) return;
+      if (val === "NEW_ALBUM") {
+        const name = await modalPrompt("New Album", "Name:", "Album Name");
+        if (name) {
+          await apiAlbumCreate(name);
+          for (const id of state.selectedItems) await apiAlbumAdd(name, id);
+          await loadAlbumsSidebar(); clearSelection();
+        }
+      } else {
+        for (const id of state.selectedItems) await apiAlbumAdd(val, id);
+        clearSelection();
+      }
+      e.target.value = "";
+    };
+  }
+
+  if (qs("addAlbumBtn")) qs("addAlbumBtn").onclick = async () => {
+    const name = await modalPrompt("New Album", "Enter album name:", "Album Name");
+    if (name && name.trim()) {
+      const ok = await apiAlbumCreate(name.trim());
+      if (ok) {
+        showToast("Album created", "success");
+        await loadAlbumsSidebar();
+      } else {
+        showToast("Failed to create album", "error");
+      }
+    }
+  };
+
   await loadAlbumsSidebar();
-  await loadCurrentYear();
+  await loadRecent();
+  await checkDeepLink();
+  lucide.createIcons();
+});
+
+document.addEventListener("keydown", (e) => {
+  const lb = qs("lightbox");
+  if (lb && lb.classList.contains("active")) {
+    if (e.key === "Escape") closeLightbox();
+    if (e.key === "ArrowLeft") navigateLightbox(-1);
+    if (e.key === "ArrowRight") navigateLightbox(1);
+  }
 });
