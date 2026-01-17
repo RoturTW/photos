@@ -1,8 +1,6 @@
 import { state } from './state.js';
 import { qs, monthName, formatBytes } from './utils.js';
 
-const GROUP_BATCH = 6;
-
 export function groupByMonth(items) {
     const groups = [];
     let currentMonth = "";
@@ -30,26 +28,12 @@ export function render(items) {
         return;
     }
 
-    state.items = items;
-    state.groups = groupByMonth(items);
-    state.renderIndex = 0;
+    const sorted = [...items].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
-    const sentinel = document.createElement("div");
-    sentinel.id = "loadSentinel";
-    sentinel.style.height = "10px";
-    grid.after(sentinel);
+    state.items = sorted;
+    state.groups = groupByMonth(sorted);
 
-    renderMore();
-    ensureObserver();
-}
-
-export function renderMore() {
-    const grid = qs("grid");
-    if (!grid || state.renderIndex >= state.groups.length) return;
-
-    const end = Math.min(state.renderIndex + GROUP_BATCH, state.groups.length);
-    for (let i = state.renderIndex; i < end; i++) {
-        const group = state.groups[i];
+    state.groups.forEach(group => {
         const section = document.createElement("div");
         section.className = "section";
         section.innerHTML = `<div class="section-header"><div class="section-title">${group.month}</div></div>`;
@@ -62,9 +46,10 @@ export function renderMore() {
 
         section.appendChild(photoGrid);
         grid.appendChild(section);
-    }
-    state.renderIndex = end;
+    });
+
     lucide.createIcons();
+    ensureImageObserver();
 }
 
 export function createPhotoCard(item) {
@@ -76,8 +61,10 @@ export function createPhotoCard(item) {
     const isFavorite = state.favorites.has(item.id);
     const previewUrl = item.owner ? `/api/shared/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.id)}` : (state.view === "bin" ? `/api/bin/preview/${encodeURIComponent(item.id)}` : `/api/image/preview/${encodeURIComponent(item.id)}`);
 
+    card.dataset.src = previewUrl;
+
     card.innerHTML = `
-    <img loading="lazy" src="${previewUrl}" alt="">
+    <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="">
     <div class="photo-overlay">
       <div class="photo-overlay-btn zoom-btn" title="Open Lightbox">
         <i data-lucide="zoom-in"></i>
@@ -114,19 +101,35 @@ export function createPhotoCard(item) {
     return card;
 }
 
-export function ensureObserver() {
+export function ensureImageObserver() {
+    if (state.imageObserver) {
+        state.imageObserver.disconnect();
+    }
+
     const rootEl = document.querySelector(".content") || null;
-    if (!state.loadObserver) {
-        state.loadObserver = new IntersectionObserver(entries => {
-            for (const e of entries) {
-                if (e.isIntersecting && state.renderIndex < state.groups.length) {
-                    renderMore();
+
+    state.imageObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            const card = entry.target;
+            const img = card.querySelector('img');
+            if (entry.isIntersecting) {
+                if (img.src !== card.dataset.src) {
+                    img.src = card.dataset.src;
+                }
+            } else {
+                if (img.src && !img.src.startsWith("data:")) {
+                    img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
                 }
             }
-        }, { root: rootEl, rootMargin: "800px" });
-    }
-    const sentinel = qs("loadSentinel");
-    if (sentinel) state.loadObserver.observe(sentinel);
+        });
+    }, {
+        root: rootEl,
+        rootMargin: "1000px 0px"
+    });
+
+    document.querySelectorAll('.photo-card').forEach(card => {
+        state.imageObserver.observe(card);
+    });
 }
 
 export function renderStorage(stats) {

@@ -402,7 +402,7 @@ window.addEventListener("load", async () => {
   };
 
   await loadAlbumsSidebar();
-  await loadRecent();
+  await loadAll();
   await checkDeepLink();
   lucide.createIcons();
 });
