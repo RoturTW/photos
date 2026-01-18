@@ -21,7 +21,6 @@ object userData = {}
 
 boolean useSubscriptions = false
 object subscriptionSizes = {}
-array alwaysAllowedUsers = []
 object quotas = {}
 
 string authKey = ""

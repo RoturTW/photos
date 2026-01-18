@@ -37,9 +37,8 @@ def noCORS(*gin.Context c) (
 )
 
 def loadConfig() (
-    object config = fs.ReadFile("config.json").JsonParse().assert(object)
+    object config = fs.ReadFile("./config.json").JsonParse().assert(object)
     authKey = config.authKey.toStr()
-    alwaysAllowedUsers = config.alwaysAllowedUsers
     useSubscriptions = config.useSubscriptions.toBool()
     subscriptionSizes = config.subscriptionSizes
     quotas = config.quotas
