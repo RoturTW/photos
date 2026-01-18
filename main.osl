@@ -28,7 +28,7 @@ def up(*gin.Context c) (
 def main() (
     if fs.Exists("db/sessions.json") (
         string data = fs.ReadFile("db/sessions.json")
-        sessions = data.JsonParse()
+        sessions = data.JsonParse().assert(object)
     )
 
     r := gin.Default()

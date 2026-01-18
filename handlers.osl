@@ -180,7 +180,7 @@ def handleUpload(*gin.Context c) (
     )
     
     object stats = calculateStorageStats(username)
-    if (stats.totalBytes.toNum() + stats.binBytes.toNum() + body.len.toNum()) > able.storageQuota.toNum() (
+    if (stats.totalBytes.toNum() + stats.binBytes.toNum() + body.len) > able.storageQuota.toNum() (
         c.JSON(403, { ok: false, error: "storage quota exceeded" })
         return
     )

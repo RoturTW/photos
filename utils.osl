@@ -42,7 +42,7 @@ def getAble(string username) object (
     if profile == null (
         if fs.Exists("db/" ++ username ++ "/user.json") (
             string data = fs.ReadFile("db/" ++ username ++ "/user.json")
-            profile = data.JsonParse()
+            profile = data.JsonParse().assert(object)
         ) else (
             return { canAccess: false, maxUpload: "0" }
         )
@@ -105,7 +105,7 @@ def enrichImagesWithSharing(string username, array images) array (
     return images
 )
 
-def writeUserImages(string username, array arr) bool (
+def writeUserImages(string username, array arr) boolean (
     string path = userDbPath(username)
     string out = arr.toStr()
     return fs.WriteFile(path, out)
@@ -164,7 +164,7 @@ def readUserAlbums(string username) object (
     return obj
 )
 
-def writeUserAlbums(string username, object albums) bool (
+def writeUserAlbums(string username, object albums) boolean (
     string path = userAlbumsPath(username)
     string out = albums.toStr()
     return fs.WriteFile(path, out)
@@ -173,7 +173,7 @@ def writeUserAlbums(string username, object albums) bool (
 def addAlbum(string username, string name) object (
     object albums = readUserAlbums(username)
     array list = albums.albums
-    bool exists = false
+    boolean exists = false
     for i list.len (
         if list[i].toStr().toLower() == name.toLower() (
             exists = true
@@ -214,7 +214,7 @@ def addImageToAlbum(string username, string name, string id) object (
         items[name] = []
     )
     array ids = items[name]
-    bool exists = false
+    boolean exists = false
     for i ids.len (
         if ids[i].toStr() == id (
             exists = true
@@ -269,7 +269,7 @@ def readUserBin(string username) array (
     return arr
 )
 
-def writeUserBin(string username, array arr) bool (
+def writeUserBin(string username, array arr) boolean (
     string path = userBinPath(username)
     string out = arr.toStr()
     return fs.WriteFile(path, out)
@@ -418,7 +418,7 @@ def readUserShares(string username) object (
     return obj
 )
 
-def writeUserShares(string username, object sharesObj) bool (
+def writeUserShares(string username, object sharesObj) boolean (
     string path = userSharesPath(username)
     return fs.WriteFile(path, sharesObj.toStr())
 )
@@ -427,12 +427,12 @@ def addShare(string owner, string imageId, string targetUsername) object (
     object sharesObj = readUserShares(owner)
     array shares = sharesObj.shares
     
-    bool found = false
+    boolean found = false
     for i shares.len (
         object share = shares[i]
         if share.imageId.toStr() == imageId (
             array sharedWith = share.sharedWith
-            bool exists = false
+            boolean exists = false
             for j sharedWith.len (
                 if sharedWith[j].toStr().toLower() == targetUsername.toLower() (
                     exists = true
@@ -484,10 +484,10 @@ def removeShare(string owner, string imageId, string targetUsername) object (
     return sharesObj
 )
 
-def setPublicShare(string owner, string imageId, bool isPublic) object (
+def setPublicShare(string owner, string imageId, boolean isPublic) object (
     object sharesObj = readUserShares(owner)
     array shares = sharesObj.shares
-    bool found = false
+    boolean found = false
     for i shares.len (
         object share = shares[i]
         if share.imageId.toStr() == imageId (
