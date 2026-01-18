@@ -4,7 +4,7 @@ def handleAuth(*gin.Context c) (
         c.JSON(401, { ok: false, error: "missing token" })
         return
     )
-    object resp = requests.Get("https://api.rotur.dev/validate?key=rotur-photos&v=" + token)
+    object resp = requests.Get("https://api.rotur.dev/validate?key=rotur-photos&v=" ++ token)
 
     if !resp.success (
         c.JSON(401, { ok: false, error: "failed to validate token" })
@@ -24,23 +24,21 @@ def handleAuth(*gin.Context c) (
     string sessionId = randomString(32)
     
     string username = token.split(",")[1]
+    array entries = sessions.getKeys()
+    for i entries.len (
+        if sessions[entries[i].toStr()] == username (
+            sessions.delete(entries[i])
+        )
+    )
     sessions[sessionId] = username
 
-    object resp_profile = requests.Get("https://api.rotur.dev/profile?include_posts=0&name=" + username)
-    if !resp_profile.success (
-        c.JSON(401, { ok: false, error: "failed to fetch profile" })
+    object profileReq = writeProfile(username)
+    if !profileReq.ok (
+        c.JSON(401, profileReq.error)
         return
     )
-    object profile = resp_profile.body.toStr().JsonParse()
-    if profile.error != null (
-        c.JSON(401, { ok: false, error: profile.error })
-        return
-    )
-    userData[username.toLower()] = profile
 
-    fs.MkdirAll("db/" ++ username.toLower())
     fs.WriteFile("db/sessions.json", sessions.JsonFormat())
-    fs.WriteFile("db/" ++ username.toLower() ++ "/user.json", profile.toStr())
 
     c.SetCookie("session_id", sessionId, 86400, "/", "", false, true)
 
@@ -60,8 +58,6 @@ def handleLogout(*gin.Context c) (
 def handleAble(*gin.Context c) (
     string username = c.MustGet("username").toStr()
     object able = getAble(username)
-    array images = readUserImages(username)
-    able["hasImages"] = images.len > 0
     c.JSON(200, able)
 )
 
@@ -80,7 +76,7 @@ def handleStorage(*gin.Context c) (
 def handleAllImages(*gin.Context c) (
     string username = c.MustGet("username").toStr()
     object able = getAble(username)
-    if !able.canAccess (
+    if !able.canAccess and !able.hasImages (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
@@ -614,7 +610,7 @@ def handleSharedImageInfo(*gin.Context c) (
 def handlePreview(*gin.Context c) (
     string username = c.MustGet("username").toStr()
     object able = getAble(username)
-    if able.canAccess == false (
+    if !able.canAccess and !able.hasImages (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
@@ -783,7 +779,7 @@ def handleBinEmpty(*gin.Context c) (
 def handleAlbums(*gin.Context c) (
     string username = c.MustGet("username")
     object able = getAble(username)
-    if !able.canAccess (
+    if !able.canAccess and !able.hasImages (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
@@ -878,7 +874,7 @@ def handleAlbumRemove(*gin.Context c) (
 def handleBinPreview(*gin.Context c) (
     string username = c.MustGet("username").toStr()
     object able = getAble(username)
-    if able.canAccess == false (
+    if !able.canAccess and !able.hasImages (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )

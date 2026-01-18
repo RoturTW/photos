@@ -399,29 +399,8 @@ func OSLjoin[T string | []any, T2 string | []any](a T, b T2) T {
 	return any(OSLcastString(a) + OSLcastString(b)).(T)
 }
 
-func OSLadd[T float64 | int | string, T2 float64 | int | string](a T, b T2) T {
-	switch aVal := any(a).(type) {
-	case string:
-		return any(aVal + " " + OSLcastString(b)).(T)
-	case float64:
-		switch bVal := any(b).(type) {
-		case float64:
-			return any(aVal + bVal).(T)
-		case int:
-			return any(aVal + float64(bVal)).(T)
-		default:
-			return any(aVal + OSLcastNumber(b)).(T)
-		}
-	default:
-		switch bVal := any(b).(type) {
-		case float64:
-			return any(OSLcastNumber(a) + bVal).(T)
-		case int:
-			return any(OSLcastNumber(a) + float64(bVal)).(T)
-		default:
-			return any(OSLcastNumber(a) + OSLcastNumber(b)).(T)
-		}
-	}
+func OSLadd[T float64 | int](a T, b T) T {
+	return T(OSLcastNumber(a) + OSLcastNumber(b))
 }
 
 func OSLsub[T float64 | int](a T, b T) T {
@@ -1678,7 +1657,7 @@ func handleAuth(c *gin.Context) {
     })
     return
   }
-  var resp map[string]any = OSLcastObject(requests.Get(OSLadd("https://api.rotur.dev/validate?key=rotur-photos&v=", token)))
+  var resp map[string]any = OSLcastObject(requests.Get(("https://api.rotur.dev/validate?key=rotur-photos&v=" + token)))
   if (OSLgetItem(resp, "success") != true) {
     c.JSON(401,  map[string]any{
       "ok": false,
@@ -1703,27 +1682,19 @@ func handleAuth(c *gin.Context) {
   }
   var sessionId string = OSLcastString(randomString(32))
   var username string = OSLcastString(OSLgetItem(strings.Split(token, ","), 1))
+  var entries []any = OSLgetKeys(sessions)
+  for i := 1; i <= OSLlen(entries); i++ {
+    if OSLequal(OSLgetItem(sessions, OSLcastString(OSLgetItem(entries, i))), username) {
+      OSLdelete(sessions, OSLgetItem(entries, i))
+    }
+  }
   OSLsetItem(sessions, sessionId, username)
-  var resp_profile map[string]any = OSLcastObject(requests.Get(OSLadd("https://api.rotur.dev/profile?include_posts=0&name=", username)))
-  if (OSLgetItem(resp_profile, "success") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "failed to fetch profile",
-    })
+  var profileReq map[string]any = OSLcastObject(writeProfile(username))
+  if (OSLgetItem(profileReq, "ok") != true) {
+    c.JSON(401, OSLgetItem(profileReq, "error"))
     return
   }
-  var profile map[string]any = OSLcastObject(JsonParse(OSLcastString(OSLgetItem(resp_profile, "body"))))
-  if OSLnotEqual(OSLgetItem(profile, "error"), nil) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": OSLgetItem(profile, "error"),
-    })
-    return
-  }
-  OSLsetItem(userData, strings.ToLower(username), profile)
-  fs.MkdirAll(("db/" + strings.ToLower(username)))
   fs.WriteFile("db/sessions.json", JsonFormat(sessions))
-  fs.WriteFile((("db/" + strings.ToLower(username)) + "/user.json"), OSLcastString(profile))
   c.SetCookie("session_id", sessionId, 86400, "/", "", false, true)
   c.JSON(200,  map[string]any{
     "ok": true,
@@ -2779,6 +2750,11 @@ func requireSession(c *gin.Context) {
 
 func homePage(c *gin.Context) {
   var username = OSLcastString(c.MustGet("username"))
+  var profileReq map[string]any = OSLcastObject(writeProfile(username))
+  if (OSLgetItem(profileReq, "ok") != true) {
+    c.HTML(401, OSLgetItem(profileReq, "error"))
+    return
+  }
   c.HTML(200, "index.html",  map[string]any{
     "Username": username,
     "Subscription": OSLgetItem(OSLgetItem(userData, strings.ToLower(username)), "subscription"),
@@ -2825,6 +2801,14 @@ func noCORS(c *gin.Context) {
   }
   c.Next()
 }
+func loadConfig() {
+  var config map[string]any = JsonParse(fs.ReadFile("config.json")).(map[string]any)
+  authKey = OSLcastString(OSLgetItem(config, "authKey"))
+  alwaysAllowedUsers = OSLgetItem(config, "alwaysAllowedUsers").([]any)
+  useSubscriptions = OSLcastBool(OSLgetItem(config, "useSubscriptions"))
+  subscriptionSizes = OSLgetItem(config, "subscriptionSizes").(map[string]any)
+  quotas = OSLgetItem(config, "quotas").(map[string]any)
+}
 func getAble(username string) map[string]any {
   username = strings.ToLower(username)
   var profile map[string]any = OSLcastObject(OSLgetItem(userData, username))
@@ -2841,17 +2825,46 @@ func getAble(username string) map[string]any {
   }
   var subscription string = strings.ToLower(OSLcastString(OSLgetItem(profile, "subscription")))
   var quota float64 = 0
-  if OSLequal(subscription, "drive") {
-    quota = 1.048576e+08
-  } else if OSLequal(subscription, "pro") {
-    quota = 1.073741824e+09
-  } else if OSLequal(subscription, "max") {
-    quota = 1.073741824e+10
+  var maybeQuota any = OSLgetItem(quotas, strings.ToLower(username))
+  if OSLnotEqual(maybeQuota, nil) {
+    quota = OSLcastNumber(maybeQuota)
+  } else if useSubscriptions {
+    quota = OSLcastNumber(OSLgetItem(subscriptionSizes, subscription))
   }
   return  map[string]any{
     "canAccess": OSLcastNumber(quota) > OSLcastNumber(0),
     "storageQuota": quota,
   }
+}
+func getProfile(username string) map[string]any {
+  var resp_profile map[string]any = OSLcastObject(requests.Get(("https://api.rotur.dev/profile?include_posts=0&name=" + username)))
+  if (OSLgetItem(resp_profile, "success") != true) {
+    return  map[string]any{
+      "ok": false,
+      "error": "failed to fetch profile",
+    }
+  }
+  var profile map[string]any = OSLcastObject(JsonParse(OSLcastString(OSLgetItem(resp_profile, "body"))))
+  if OSLnotEqual(OSLgetItem(profile, "error"), nil) {
+    return  map[string]any{
+      "ok": false,
+      "error": OSLgetItem(profile, "error"),
+    }
+  }
+  return  map[string]any{
+    "ok": true,
+    "profile": profile,
+  }
+}
+func writeProfile(username string) map[string]any {
+  var profileReq map[string]any = getProfile(username)
+  if (OSLgetItem(profileReq, "ok") != true) {
+    return profileReq
+  }
+  OSLsetItem(userData, strings.ToLower(username), OSLgetItem(profileReq, "profile"))
+  fs.MkdirAll(("db/" + strings.ToLower(username)))
+  fs.WriteFile((("db/" + strings.ToLower(username)) + "/user.json"), OSLcastString(OSLgetItem(profileReq, "profile")))
+  return profileReq
 }
 func userDbPath(username string) string {
   return (("db/" + strings.ToLower(username)) + "/images.json")
@@ -3413,6 +3426,10 @@ func servePreview(c *gin.Context, path string) bool {
 
 var sessions map[string]any = map[string]any{}
 var userData map[string]any = map[string]any{}
+var useSubscriptions bool = false
+var subscriptionSizes map[string]any = map[string]any{}
+var alwaysAllowedUsers []any = []any{}
+var quotas map[string]any = map[string]any{}
 var authKey string = ""
 func up(c *gin.Context) {
   c.String(200, "ok")
@@ -3422,6 +3439,7 @@ func main() {
     var data string = OSLcastString(fs.ReadFile("db/sessions.json"))
     sessions = JsonParse(data).(map[string]any)
   }
+  loadConfig()
   var r = gin.Default()
   r.Use(noCORS)
   r.LoadHTMLGlob("templates/*")

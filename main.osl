@@ -19,6 +19,11 @@ import "./handlers.osl"
 object sessions = {}
 object userData = {}
 
+boolean useSubscriptions = false
+object subscriptionSizes = {}
+array alwaysAllowedUsers = []
+object quotas = {}
+
 string authKey = ""
 
 def up(*gin.Context c) (
@@ -30,6 +35,8 @@ def main() (
         string data = fs.ReadFile("db/sessions.json")
         sessions = data.JsonParse().assert(object)
     )
+
+    loadConfig()
 
     r := gin.Default()
     r.Use(noCORS)

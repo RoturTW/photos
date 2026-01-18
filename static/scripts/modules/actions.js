@@ -12,7 +12,8 @@ export async function loadRecent() {
     setStatus("");
 
     const upBtn = qs("uploadBtn");
-    if (upBtn) upBtn.classList.remove("hidden");
+    if (upBtn) { if (state.able && !state.able.canAccess) upBtn.classList.add("hidden"); else upBtn.classList.remove("hidden"); }
+
     const emptyBtn = qs("emptyBinBtn");
     if (emptyBtn) emptyBtn.style.display = "none";
 

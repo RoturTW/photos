@@ -33,3 +33,4 @@ go.work.sum
 
 db
 main
+config.json

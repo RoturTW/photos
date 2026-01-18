@@ -36,6 +36,15 @@ def noCORS(*gin.Context c) (
     c.Next()
 )
 
+def loadConfig() (
+    object config = fs.ReadFile("config.json").JsonParse().assert(object)
+    authKey = config.authKey.toStr()
+    alwaysAllowedUsers = config.alwaysAllowedUsers
+    useSubscriptions = config.useSubscriptions.toBool()
+    subscriptionSizes = config.subscriptionSizes
+    quotas = config.quotas
+)
+
 def getAble(string username) object (
     username = username.toLower()
     object profile = userData[username]
@@ -49,18 +58,43 @@ def getAble(string username) object (
     )
     string subscription = profile.subscription.toStr().toLower()
     number quota = 0
-    if subscription == "drive" (
-        quota = 104857600
-    ) else if subscription == "pro" (
-        quota = 1073741824
-    ) else if subscription == "max" (
-        quota = 10737418240
+    any maybeQuota = quotas[username.toLower()]
+    if maybeQuota != null (
+        quota = maybeQuota.toNum()
+    ) else if useSubscriptions (
+        quota = subscriptionSizes[subscription].toNum()
     )
+
+    array images = readUserImages(username)
     
     return {
         canAccess: (quota > 0),
-        storageQuota: quota
+        storageQuota: quota,
+        hasImages: images.len > 0
     }
+)
+
+def getProfile(string username) object (
+    object resp_profile = requests.Get("https://api.rotur.dev/profile?include_posts=0&name=" ++ username)
+    if !resp_profile.success (
+        return { ok: false, error: "failed to fetch profile" }
+    )
+    object profile = resp_profile.body.toStr().JsonParse()
+    if profile.error != null (
+        return { ok: false, error: profile.error }
+    )
+    return { ok: true, profile: profile }
+)
+
+def writeProfile(string username) object (
+    object profileReq = getProfile(username)
+    if !profileReq.ok (
+        return profileReq
+    )
+    userData[username.toLower()] = profileReq.profile
+    fs.MkdirAll("db/" ++ username.toLower())
+    fs.WriteFile("db/" ++ username.toLower() ++ "/user.json", profileReq.profile.toStr())
+    return profileReq
 )
 
 def userDbPath(string username) string (

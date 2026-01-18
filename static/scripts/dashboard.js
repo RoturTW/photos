@@ -298,6 +298,17 @@ window.addEventListener("load", async () => {
   const able = await apiJSON("/api/able");
   state.able = able;
 
+  if (able) {
+    if (!able.canAccess) {
+      if (able.hasImages) {
+        qs("readonlyBanner")?.classList.remove("hidden");
+        qs("uploadBtn")?.classList.add("hidden");
+      } else {
+        qs("subscriptionOverlay")?.classList.add("active");
+      }
+    }
+  }
+
   if (qs("logoutBtn")) qs("logoutBtn").onclick = async () => { await apiLogout(); window.location.href = "/auth"; };
 
   if (qs("userAvatar")) {
