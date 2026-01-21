@@ -910,11 +910,6 @@ def handleDirectImage(*gin.Context c) (
     if sessionId != "" and sessions.contains(sessionId) (
         requestingUser = sessions[sessionId].toStr().toLower()
     )
-    
-    if requestingUser == "" (
-        c.Redirect(302, "/auth")
-        return
-    )
 
     bool allowed = (owner.toLower() == requestingUser)
     if !allowed (
@@ -942,6 +937,10 @@ def handleDirectImage(*gin.Context c) (
     )
     
     if !allowed (
+        if requestingUser == "" (
+            c.Redirect(302, "/auth")
+            return
+        )
         c.HTML(403, "error.html", {
             "Title": "Access Denied",
             "Message": "You don't have access to this image."
@@ -951,6 +950,10 @@ def handleDirectImage(*gin.Context c) (
 
     string path = 'db/' ++ owner.toLower() ++ '/blob/' ++ id ++ '.jpg'
     if !fs.Exists(path) or fs.IsDir(path) (
+        if requestingUser == "" (
+            c.Redirect(302, "/auth")
+            return
+        )
         c.HTML(404, "error.html", {
             "Title": "Not Found",
             "Message": "Image not found."
