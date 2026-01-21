@@ -948,10 +948,16 @@ def handleDirectImage(*gin.Context c) (
         })
         return
     )
-    
-    c.HTML(200, "index.html", {
-        "Username": requestingUser,
-        "Subscription": userData[requestingUser].subscription,
-    })
+
+    string path = 'db/' ++ owner.toLower() ++ '/blob/' ++ id ++ '.jpg'
+    if !fs.Exists(path) or fs.IsDir(path) (
+        c.HTML(404, "error.html", {
+            "Title": "Not Found",
+            "Message": "Image not found."
+        })
+        return
+    )
+
+    c.File(path)
 )
 
