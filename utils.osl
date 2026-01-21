@@ -109,6 +109,7 @@ def ensureUserDb(string username) (
     if !fs.Exists(path) (
         fs.WriteFile(path, "[]")
     )
+    ensureCacheDir(username)
 )
 
 def readUserImages(string username) array (
@@ -288,6 +289,13 @@ def ensureUserBin(string username) (
     string path = userBinPath(username)
     if !fs.Exists(path) (
         fs.WriteFile(path, "[]")
+    )
+)
+
+def ensureCacheDir(string username) (
+    string dir = "db/" ++ username.toLower() ++ "/cache"
+    if !fs.Exists(dir) (
+        fs.MkdirAll(dir)
     )
 )
 
@@ -571,23 +579,37 @@ def getSharedWithMe(string username) array (
     return results
 )
 
-def servePreview(*gin.Context c, string path) boolean (
+def getCachePath(string username, string id) string (
+    return "db/" ++ username.toLower() ++ "/cache/" ++ id ++ "_preview.jpg"
+)
+
+def servePreview(*gin.Context c, string path, string id, string username) boolean (
     if !fs.Exists(path) or fs.IsDir(path) (
         c.JSON(404, { ok: false, error: "not found" })
         return false
     )
     
-    object fileInfo = fs.GetStat(path)
-    string etag = "preview-" ++ fileInfo.modTime.toStr()
-    string ifNoneMatch = c.GetHeader("If-None-Match")
-    if ifNoneMatch == etag (
-        c.Status(304)
-        return true
+    string cachePath = getCachePath(username, id)
+    if fs.Exists(cachePath) (
+        object cacheInfo = fs.GetStat(cachePath)
+        object origInfo = fs.GetStat(path)
+        
+        if cacheInfo.modTime.toNum() >= origInfo.modTime.toNum() (
+            string etag = "preview-" ++ cacheInfo.modTime.toStr()
+            string ifNoneMatch = c.GetHeader("If-None-Match")
+            if ifNoneMatch == etag (
+                c.Status(304)
+                return true
+            )
+            
+            c.Header("ETag", etag)
+            c.Header("Cache-Control", "private, max-age=31536000, immutable")
+            c.File(cachePath)
+            return true
+        )
     )
     
-    c.Header("ETag", etag)
-    c.Header("Cache-Control", "private, must-revalidate")
-    
+    object fileInfo = fs.GetStat(path)
     number fileSize = fileInfo.size.toNum()
     if fileSize == 0 (
         c.JSON(404, { ok: false, error: "not found" })
@@ -611,12 +633,8 @@ def servePreview(*gin.Context c, string path) boolean (
     number maxh = 200
     
     if w <= maxw and h <= maxh (
-        byte[] out = img.EncodeJPEGBytes(im, 80)
-        if out.len == 0 (
-            c.JSON(500, { ok: false, error: "encode failed" })
-            return false
-        )
-        c.Data(200, "image/jpeg", out)
+        c.Header("Cache-Control", "private, max-age=31536000, immutable")
+        c.File(path)
         return true
     )
     
@@ -624,20 +642,27 @@ def servePreview(*gin.Context c, string path) boolean (
     int rw = round(w * ratio)
     int rh = round(h * ratio)
     
-    resized := img.Resize(im, rw, rh)
+    resized := img.ResizeFast(im, rw, rh)
     if resized == null (
         c.JSON(500, { ok: false, error: "resize failed" })
         return false
     )
     defer resized.Close()
     
-    im.Close()
+    boolean cached = img.SaveJPEG(resized, cachePath, 80)
     
-    byte[] out = img.EncodeJPEGBytes(resized, 80)
-    if out.len == 0 (
-        c.JSON(500, { ok: false, error: "encode failed" })
-        return false
+    if cached (
+        c.Header("Cache-Control", "private, max-age=31536000, immutable")
+        c.File(cachePath)
+    ) else (
+        byte[] out = img.EncodeJPEGBytes(resized, 80)
+        if out.len == 0 (
+            c.JSON(500, { ok: false, error: "encode failed" })
+            return false
+        )
+        c.Header("Cache-Control", "private, max-age=3600")
+        c.Data(200, "image/jpeg", out)
     )
-    c.Data(200, "image/jpeg", out)
+    
     return true
 )

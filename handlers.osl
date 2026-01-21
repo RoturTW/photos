@@ -616,7 +616,7 @@ def handlePreview(*gin.Context c) (
     )
     string id = c.Param("id").toStr()
     string path = "db/" ++ username.toLower() ++ "/blob/" ++ id ++ ".jpg"
-    servePreview(c, path)
+    servePreview(c, path, id, username)
 )
 
 def handleDeleteImage(*gin.Context c) (
@@ -880,7 +880,7 @@ def handleBinPreview(*gin.Context c) (
     )
     string id = c.Param("id").toStr()
     string path = "db/" ++ username.toLower() ++ "/bin/" ++ id ++ ".jpg"
-    servePreview(c, path)
+    servePreview(c, path, id, username)
 )
 
 def handleShareInfo(*gin.Context c) (
