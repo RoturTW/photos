@@ -21,6 +21,10 @@ import {
 import { loadStorage } from './modules/storage.js';
 import { openShareManagement } from './modules/sharing.js';
 
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/static/sw.js", { updateViaCache: "none" });
+}
+
 window.toggleSidebar = toggleSidebar;
 
 function toggleSelection(id) {
