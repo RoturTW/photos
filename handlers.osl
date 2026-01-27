@@ -24,12 +24,6 @@ def handleAuth(*gin.Context c) (
     string sessionId = randomString(32)
     
     string username = token.split(",")[1]
-    array entries = sessions.getKeys()
-    for i entries.len (
-        if sessions[entries[i].toStr()] == username (
-            sessions.delete(entries[i])
-        )
-    )
     sessions[sessionId] = username
 
     object profileReq = writeProfile(username)
@@ -160,76 +154,88 @@ def handleMonthImages(*gin.Context c) (
 def handleUpload(*gin.Context c) (
     string username = c.MustGet("username").toStr()
     object able = getAble(username)
+
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
-    string tmpBase = "db/" ++ username.toLower() ++ "/blob"
-    if !fs.Exists(tmpBase) (
-        fs.MkdirAll(tmpBase)
+
+    string base = "db/" ++ username.toLower() ++ "/blob"
+    if !fs.Exists(base) (
+        fs.MkdirAll(base)
     )
-    string tmpPath = tmpBase ++ "/tmp-" ++ randomString(16)
+
+    string tmpPath = base ++ "/tmp-" ++ randomString(16)
     string body = c.Request.Body.toStr()
+
     if body.len == 0 (
         c.JSON(400, { ok: false, error: "empty body" })
         return
     )
-    
+
     object stats = calculateStorageStats(username)
     if (stats.totalBytes.toNum() + stats.binBytes.toNum() + body.len) > able.storageQuota.toNum() (
         c.JSON(403, { ok: false, error: "storage quota exceeded" })
         return
     )
-    boolean wroteTmp = fs.WriteFile(tmpPath, body)
-    if !wroteTmp (
+
+    if !fs.WriteFile(tmpPath, body) (
         c.JSON(500, { ok: false, error: "failed to write upload" })
         return
     )
+
     im := img.Open(tmpPath)
-    if im == nil (
-        c.JSON(400, { ok: false, error: "invalid image" })
+    if im == null (
         fs.Remove(tmpPath)
+        c.JSON(400, { ok: false, error: "invalid image" })
         return
     )
-    defer im.Close()
+
     object size = im.Size()
     int w = round(size["w"])
     int h = round(size["h"])
+
+    if w > downscaleWhen.width or h > downscaleWhen.height (
+        number ratio = min(downscaleWhen.width.toInt() / w, downscaleWhen.height.toInt() / h).toNum()
+
+        w = round(w * ratio)
+        h = round(h * ratio)
+
+        resized := img.Resize(im, w, h)
+        im.Close()
+
+        if resized == null (
+            fs.Remove(tmpPath)
+            c.JSON(500, { ok: false, error: "resize failed" })
+            return
+        )
+
+        im = resized
+    )
+
     string id = randomString(24)
-    string path = tmpBase ++ "/" ++ id ++ ".jpg"
-    resized := img.Resize(im, w, h)
-    if resized == null (
-        c.JSON(500, { ok: false, error: "failed to resize" })
+    string outPath = base ++ "/" ++ id ++ ".jpg"
+
+    if !img.SaveJPEG(im, outPath, 90) (
+        im.Close()
         fs.Remove(tmpPath)
+        c.JSON(500, { ok: false, error: "save failed" })
         return
     )
-    defer resized.Close()
-    boolean wrote = img.SaveJPEG(resized, path, 90)
-    if !wrote (
-        c.JSON(500, { ok: false, error: "failed to save" })
-        fs.Remove(tmpPath)
-        return
-    )
+
+    im.Close()
+
     number tsms = time.Now().UnixMilli()
     "*exif.Exif" x = null
+
     raw("f, err := os.Open(tmpPath)")
     if err == null (
+        raw("defer f.Close()")
         raw("x, err = exif.Decode(f)")
         if err == null (
-            raw("t0, err := x.DateTime()")
-            if err == null and !t0.IsZero() (
-                tsms = t0.UnixMilli().toNum()
-            ) else (
-                raw("tag, err := x.Get(exif.DateTimeOriginal)")
-                if err == null and tag != null (
-                    raw("s, err := tag.StringVal()")
-                    if err == null (
-                        raw("t1, err := time.Parse(\"2006:01:02 15:04:05\", s)")
-                        if err == null and !t1.IsZero()  (
-                            tsms = t1.UnixMilli().toNum()
-                        )
-                    )
-                )
+            raw("t, err := x.DateTime()")
+            if err == null and !t.IsZero() (
+                tsms = t.UnixMilli().toNum()
             )
         )
     )
@@ -252,9 +258,11 @@ def handleUpload(*gin.Context c) (
         raw("if tag, err := x.Get(exif.FNumber); err == nil { entry[\"f_number\"], _ = tag.StringVal() }")
     )
     fs.Remove(tmpPath)
-    array arr = readUserImages(username)
-    arr.append(entry)
-    writeUserImages(username, arr)
+
+    array images = readUserImages(username)
+    images.append(entry)
+    writeUserImages(username, images)
+
     c.JSON(200, { ok: true, id: id })
 )
 

@@ -42,6 +42,10 @@ def loadConfig() (
     useSubscriptions = config.useSubscriptions.toBool()
     subscriptionSizes = config.subscriptionSizes
     quotas = config.quotas
+
+    if config.downscaleWhen != null (
+        downscaleWhen = config.downscaleWhen
+    )
 )
 
 def getAble(string username) object (

@@ -23,6 +23,8 @@ boolean useSubscriptions = false
 object subscriptionSizes = {}
 object quotas = {}
 
+object downscaleWhen = {}
+
 string authKey = ""
 
 def up(*gin.Context c) (
