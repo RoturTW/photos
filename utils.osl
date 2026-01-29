@@ -134,7 +134,7 @@ def enrichImagesWithSharing(string username, array images) array (
         object img = images[i]
         for j shares.len (
             object share = shares[j]
-            if share.imageId.toStr() == img.id.toStr() (
+            if share.imageId == img.id (
                 img["sharedWith"] = share.sharedWith
                 img["isPublic"] = share.isPublic
             )
@@ -152,7 +152,7 @@ def writeUserImages(string username, array arr) boolean (
 def findImage(array arr, string id) object (
     for i arr.len (
         object it = arr[i]
-        if it.id.toStr() == id (
+        if it.id == id (
             return it
         )
     )
@@ -163,7 +163,18 @@ def removeImage(array arr, string id) array (
     array out = []
     for i arr.len (
         object it = arr[i]
-        if it.id.toStr() != id (
+        if it.id != id (
+            out.append(it)
+        )
+    )
+    return out
+)
+
+def removeImages(array arr, array ids) array (
+    array out = []
+    for i arr.len (
+        object it = arr[i]
+        if !ids.contains(it.id) (
             out.append(it)
         )
     )

@@ -131,6 +131,15 @@ export async function apiDelete(id) {
     return res.ok;
 }
 
+export async function apiDeleteImages(ids) {
+    const res = await fetch("/api/images/delete", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: ids })
+    });
+    return res.ok;
+}
+
 export async function apiRotateImage(id, angle) {
     const res = await fetch(`/api/image/${encodeURIComponent(id)}/rotate`, {
         method: "POST",

@@ -1,7 +1,7 @@
 import { state } from './state.js';
 import { qs, formatBytes } from './utils.js';
 import { showToast, showLoader, hideLoader, modalConfirm, setViewTitle, setActiveNav, setStatus } from './ui.js';
-import { apiJSON, apiDelete } from './api.js';
+import { apiJSON, apiDelete, apiDeleteImages } from './api.js';
 import { openLightbox } from './lightbox.js';
 
 export async function loadStorage() {
@@ -62,10 +62,11 @@ export async function cleanUpAllDuplicates() {
 
     showLoader(`Cleaning up ${toDelete.length} duplicates...`);
     try {
+        await apiDeleteImages(toDelete);
         for (const id of toDelete) {
-            await apiDelete(id);
             patchStorageState(id);
         }
+        renderStorage();
         showToast(`Successfully removed ${toDelete.length} duplicates`, "success");
     } catch (err) {
         console.error("Cleanup error:", err);

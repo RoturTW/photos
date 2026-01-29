@@ -67,6 +67,7 @@ def main() (
     images.GET("/recent", requireSession, handleRecentImages)
     images.GET("/:year", requireSession, handleYearImages)
     images.GET("/:year/:month", requireSession, handleMonthImages)
+    images.DELETE("delete", requireSession, handleDeleteImages)
 
     image := api.Group("/image")
     image.POST("/upload", requireSession, handleUpload)

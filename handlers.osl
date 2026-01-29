@@ -166,7 +166,7 @@ def handleUpload(*gin.Context c) (
     )
 
     string tmpPath = base ++ "/tmp-" ++ randomString(16)
-    string body = c.Request.Body.toStr()
+    byte[] body = c.GetRawData().toArray()[1].assert(byte[])
 
     if body.len == 0 (
         c.JSON(400, { ok: false, error: "empty body" })
@@ -645,7 +645,7 @@ def handleDeleteImage(*gin.Context c) (
     if data.len > 0 (
         imgFile := img.DecodeBytes(data)
         if imgFile != null (
-            object s = img.Size(imgFile)
+            object s = imgFile.Size()
             int w = round(s.w)
             int h = round(s.h)
             resized := img.Resize(imgFile, w, h)
@@ -679,6 +679,31 @@ def handleDeleteImage(*gin.Context c) (
     c.JSON(200, { ok: true })
 )
 
+def handleDeleteImages(*gin.Context c) (
+    string username = c.MustGet("username").toStr()
+    object able = getAble(username)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    any ids = c.request.body.toStr().JsonParse().ids
+    if ids.len == 0 (
+        c.JSON(400, { ok: false, error: "missing ids" })
+        return
+    )
+    if typeof(ids) != "array" (
+        c.JSON(400, { ok: false, error: "invalid ids" })
+        return
+    )
+    for i ids.len (
+        fs.Remove("db/" ++ username.toLower() ++ "/blob/" ++ ids[i].toStr() ++ ".jpg")
+    )
+    array arr = readUserImages(username)
+    array out = removeImages(arr, ids.assert(array))
+    writeUserImages(username, out)
+    c.JSON(200, { ok: true })
+)
+
 def handleBinList(*gin.Context c) (
     string username = c.MustGet("username").toStr()
     object able = getAble(username)
@@ -707,7 +732,7 @@ def handleBinRestore(*gin.Context c) (
         return
     )
     defer imgFile.Close()
-    object size = img.Size(imgFile)
+    object size = imgFile.Size()
     int w = round(size["w"])
     int h = round(size["h"])
     resized := img.Resize(imgFile, w, h)
