@@ -23,10 +23,11 @@ def handleAuth(*gin.Context c) (
 
     string sessionId = randomString(32)
     
-    string username = token.split(",")[1]
-    sessions[sessionId] = username
+    string userId = json.id.toStr()
+    string username = json.username.toStr()
+    sessions[sessionId] = userId
 
-    object profileReq = writeProfile(username)
+    object profileReq = writeProfile(userId, username)
     if !profileReq.ok (
         c.JSON(401, profileReq.error)
         return
@@ -50,43 +51,43 @@ def handleLogout(*gin.Context c) (
 )
 
 def handleAble(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
-    object able = getAble(username)
+    string userId = c.MustGet("userId").toStr()
+    object able = getAble(userId)
     c.JSON(200, able)
 )
 
 def handleStorage(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
-    object able = getAble(username)
+    string userId = c.MustGet("userId").toStr()
+    object able = getAble(userId)
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
-    object stats = calculateStorageStats(username)
+    object stats = calculateStorageStats(userId)
     stats["quota"] = able.storageQuota
     c.JSON(200, stats)
 )
 
 def handleAllImages(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
-    object able = getAble(username)
+    string userId = c.MustGet("userId").toStr()
+    object able = getAble(userId)
     if !able.canAccess and !able.hasImages (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
-    array images = readUserImages(username)
-    images = enrichImagesWithSharing(username, images)
+    array images = readUserImages(userId)
+    images = enrichImagesWithSharing(userId, images)
     c.JSON(200, images)
 )
 
 def handleRecentImages(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
-    object able = getAble(username)
+    string userId = c.MustGet("userId").toStr()
+    object able = getAble(userId)
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
-    array arr = readUserImages(username)
+    array arr = readUserImages(userId)
     int n = arr.len
     number nowMs = time.Now().UnixMilli()
     number ninety = 90 * 24 * 60 * 60 * 1000
@@ -98,19 +99,19 @@ def handleRecentImages(*gin.Context c) (
             out.append(it)
         )
     )
-    out = enrichImagesWithSharing(username, out)
+    out = enrichImagesWithSharing(userId, out)
     c.JSON(200, out)
 )
 
 def handleYearImages(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
-    object able = getAble(username)
+    string userId = c.MustGet("userId").toStr()
+    object able = getAble(userId)
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
     int year = c.Param("year").toNum()
-    array arr = readUserImages(username)
+    array arr = readUserImages(userId)
     int n = arr.len
     array out = []
     for i n (
@@ -121,20 +122,20 @@ def handleYearImages(*gin.Context c) (
             out.append(it)
         )
     )
-    out = enrichImagesWithSharing(username, out)
+    out = enrichImagesWithSharing(userId, out)
     c.JSON(200, out)
 )
 
 def handleMonthImages(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
-    object able = getAble(username)
+    string userId = c.MustGet("userId").toStr()
+    object able = getAble(userId)
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
     int year = c.Param("year").toNum()
     int month = c.Param("month").toNum()
-    array arr = readUserImages(username)
+    array arr = readUserImages(userId)
     int n = arr.len
     array out = []
     for i n (
@@ -147,20 +148,20 @@ def handleMonthImages(*gin.Context c) (
             out.append(it)
         )
     )
-    out = enrichImagesWithSharing(username, out)
+    out = enrichImagesWithSharing(userId, out)
     c.JSON(200, out)
 )
 
 def handleUpload(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
-    object able = getAble(username)
+    string userId = c.MustGet("userId").toStr()
+    object able = getAble(userId)
 
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
 
-    string base = "db/" ++ username.toLower() ++ "/blob"
+    string base = "db/" ++ userId ++ "/blob"
     if !fs.Exists(base) (
         fs.MkdirAll(base)
     )
@@ -173,7 +174,7 @@ def handleUpload(*gin.Context c) (
         return
     )
 
-    object stats = calculateStorageStats(username)
+    object stats = calculateStorageStats(userId)
     if (stats.totalBytes.toNum() + stats.binBytes.toNum() + body.len) > able.storageQuota.toNum() (
         c.JSON(403, { ok: false, error: "storage quota exceeded" })
         return
@@ -259,28 +260,28 @@ def handleUpload(*gin.Context c) (
     )
     fs.Remove(tmpPath)
 
-    array images = readUserImages(username)
+    array images = readUserImages(userId)
     images.append(entry)
-    writeUserImages(username, images)
+    writeUserImages(userId, images)
 
     c.JSON(200, { ok: true, id: id })
 )
 
 def handleId(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
-    object able = getAble(username)
+    string userId = c.MustGet("userId").toStr()
+    object able = getAble(userId)
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
-    string id = c.Param("id").toStr()
+    string id = c.Param("id")
     boolean json = false
     if id.endsWith(".json") (
         id = id.trim(1, -6)
         json = true
     )
     if json (
-        object it = findImage(readUserImages(username), id)
+        object it = findImage(readUserImages(userId), id)
         if it.id == null (
             c.JSON(404, { ok: false, error: "not found" })
             return
@@ -288,7 +289,7 @@ def handleId(*gin.Context c) (
         c.JSON(200, it)
         return
     )
-    string path = "db/" ++ username.toLower() ++ "/blob/" ++ id ++ ".jpg"
+    string path = "db/" ++ userId ++ "/blob/" ++ id ++ ".jpg"
     if !fs.Exists(path) or fs.IsDir(path) (
         c.JSON(404, { ok: false, error: "not found" })
         return
@@ -308,18 +309,18 @@ def handleId(*gin.Context c) (
 )
 
 def handleImageRotate(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
-    object able = getAble(username)
+    string userId = c.MustGet("userId").toStr()
+    object able = getAble(userId)
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
-    string id = c.Param("id").toStr()
+    string id = c.Param("id")
     
     object body = c.Request.Body.toStr().JsonParse()
     number angle = body["angle"].toNum()
 
-    string path = "db/" ++ username.toLower() ++ "/blob/" ++ id ++ ".jpg"
+    string path = "db/" ++ userId ++ "/blob/" ++ id ++ ".jpg"
     if !fs.Exists(path) or fs.IsDir(path) (
         c.JSON(404, { ok: false, error: "not found" })
         return
@@ -345,14 +346,14 @@ def handleImageRotate(*gin.Context c) (
         return
     )
 
-    array arr = readUserImages(username)
+    array arr = readUserImages(userId)
     object it = findImage(arr, id)
     if it.id != null (
         if angle == 90 or angle == 270 (
             number oldW = it.width.toNum()
             it.width = it.height
             it.height = oldW
-            writeUserImages(username, arr)
+            writeUserImages(userId, arr)
         )
     )
 
@@ -360,14 +361,14 @@ def handleImageRotate(*gin.Context c) (
 )
 
 def handleSearch(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
-    object able = getAble(username)
+    string userId = c.MustGet("userId").toStr()
+    object able = getAble(userId)
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
-    string q = c.Query("q").toStr().toLower()
-    array arr = readUserImages(username)
+    string q = c.Query("q").toLower()
+    array arr = readUserImages(userId)
     if q == "" (
         c.JSON(200, arr)
         return
@@ -376,7 +377,7 @@ def handleSearch(*gin.Context c) (
     array months = ["january", "february", "march", "april", "may", "june", 
                     "july", "august", "september", "october", "november", "december"]
     
-    object albums = readUserAlbums(username)
+    object albums = readUserAlbums(userId)
     
     array out = []
     int n = arr.len
@@ -388,7 +389,7 @@ def handleSearch(*gin.Context c) (
         if ts > 0 (
             t := time.UnixMilli(int64(ts))
             int year = t.Year()
-            int month = int(t.Month())
+            int month = round(t.Month())
             
             if q.contains(year.toStr()) (
                 match = true
@@ -432,11 +433,11 @@ def handleSearch(*gin.Context c) (
 )
 
 def handleShareMine(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
-    object sharesObj = readUserShares(username)
+    string userId = c.MustGet("userId").toStr()
+    object sharesObj = readUserShares(userId)
     array shares = sharesObj.shares
     
-    array images = readUserImages(username)
+    array images = readUserImages(userId)
     array out = []
     
     for i shares.len (
@@ -453,8 +454,8 @@ def handleShareMine(*gin.Context c) (
 )
 
 def handleShareOthers(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
-    array sharedWithMe = getSharedWithMe(username)
+    string userId = c.MustGet("userId").toStr()
+    array sharedWithMe = getSharedWithMe(userId)
     
     // Enrich with image data
     array results = []
@@ -474,7 +475,7 @@ def handleShareOthers(*gin.Context c) (
 )
 
 def handleSharePatch(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
+    string userId = c.MustGet("userId").toStr()
     string imageId = c.Param("id")
     
     object body = c.Request.Body.toStr().JsonParse()
@@ -489,21 +490,29 @@ def handleSharePatch(*gin.Context c) (
     )
     
     for i add.len (
-        addShare(username, imageId, add[i].toStr())
+        string targetUsername = add[i].toStr()
+        string targetUserId = getUserIdFromUsername(targetUsername)
+        if targetUserId != "" (
+            addShare(userId, imageId, targetUserId)
+        )
     )
     for i remove.len (
-        removeShare(username, imageId, remove[i].toStr())
+        string targetUsername = remove[i].toStr()
+        string targetUserId = getUserIdFromUsername(targetUsername)
+        if targetUserId != "" (
+            removeShare(userId, imageId, targetUserId)
+        )
     )
     
     if body["isPublic"] != null (
-        setPublicShare(username, imageId, body["isPublic"].toBool())
+        setPublicShare(userId, imageId, body["isPublic"].toBool())
     )
     
     c.JSON(200, { ok: true })
 )
 
 def handleShareCreate(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
+    string userId = c.MustGet("userId").toStr()
     
     object body = c.Request.Body.toStr().JsonParse()
     string imageId = body["imageId"].toStr()
@@ -514,32 +523,44 @@ def handleShareCreate(*gin.Context c) (
         return
     )
     
-    array images = readUserImages(username)
+    array images = readUserImages(userId)
     object img = findImage(images, imageId)
     if img.id == null (
         c.JSON(404, { ok: false, error: "image not found" })
         return
     )
     
-    addShare(username, imageId, targetUser)
+    string targetUserId = getUserIdFromUsername(targetUser)
+    if targetUserId == "" (
+        c.JSON(400, { ok: false, error: "user not found" })
+        return
+    )
+    
+    addShare(userId, imageId, targetUserId)
     c.JSON(200, { ok: true })
 )
 
 def handleSharedImage(*gin.Context c) (
-    string owner = c.Param("owner")
+    string ownerUsername = c.Param("owner")
     string id = c.Param("id")
-    string requestingUser = ""
+    string requestingUserId = ""
     
     string sessionId = c.Cookie("session_id").toArray()[1].toStr()
     if sessionId != "" and sessions.contains(sessionId) (
-        requestingUser = sessions[sessionId].toStr().toLower()
+        requestingUserId = sessions[sessionId].toStr()
     )
     
-    object sharesObj = readUserShares(owner)
+    string ownerId = getUserIdFromUsername(ownerUsername)
+    if ownerId == "" (
+        c.JSON(404, { ok: false, error: "owner not found" })
+        return
+    )
+    
+    object sharesObj = readUserShares(ownerId)
     array shares = sharesObj.shares
     bool allowed = false
     
-    if requestingUser == owner.toLower() (
+    if requestingUserId == ownerId (
         allowed = true
     )
     
@@ -548,7 +569,7 @@ def handleSharedImage(*gin.Context c) (
         if share.imageId.toStr() == id (
             array sharedWith = share.sharedWith
             for j sharedWith.len (
-                if sharedWith[j].toStr().toLower() == requestingUser (
+                if sharedWith[j].toStr() == requestingUserId (
                     allowed = true
                 )
             )
@@ -560,7 +581,7 @@ def handleSharedImage(*gin.Context c) (
         return
     )
     
-    string path = "db/" ++ owner.toLower() ++ "/blob/" ++ id ++ ".jpg"
+    string path = "db/" ++ ownerId ++ "/blob/" ++ id ++ ".jpg"
     if !fs.Exists(path) (
         c.JSON(404, { ok: false, error: "not found" })
         return
@@ -570,20 +591,26 @@ def handleSharedImage(*gin.Context c) (
 
 
 def handleSharedImageInfo(*gin.Context c) (
-    string owner = c.Param("owner")
+    string ownerUsername = c.Param("owner")
     string id = c.Param("id")
-    string requestingUser = ""
+    string requestingUserId = ""
     
     string sessionId = c.Cookie("session_id").toArray()[1].toStr()
     if sessionId != "" and sessions.contains(sessionId) (
-        requestingUser = sessions[sessionId].toStr().toLower()
+        requestingUserId = sessions[sessionId].toStr()
     )
     
-    object sharesObj = readUserShares(owner)
+    string ownerId = getUserIdFromUsername(ownerUsername)
+    if ownerId == "" (
+        c.JSON(404, { ok: false, error: "owner not found" })
+        return
+    )
+    
+    object sharesObj = readUserShares(ownerId)
     array shares = sharesObj.shares
     bool allowed = false
     
-    if requestingUser == owner.toLower() (
+    if requestingUserId == ownerId (
         allowed = true
     )
     
@@ -592,7 +619,7 @@ def handleSharedImageInfo(*gin.Context c) (
         if share.imageId.toStr() == id (
             array sharedWith = share.sharedWith
             for j sharedWith.len (
-                if sharedWith[j].toStr().toLower() == requestingUser (
+                if sharedWith[j].toStr() == requestingUserId (
                     allowed = true
                 )
             )
@@ -604,38 +631,38 @@ def handleSharedImageInfo(*gin.Context c) (
         return
     )
     
-    array images = readUserImages(owner)
+    array images = readUserImages(ownerId)
     object img = findImage(images, id)
     if img.id == null (
         c.JSON(404, { ok: false, error: "not found" })
         return
     )
     
-    img["owner"] = owner
+    img["owner"] = ownerUsername
     c.JSON(200, img)
 )
 
 def handlePreview(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
-    object able = getAble(username)
+    string userId = c.MustGet("userId").toStr()
+    object able = getAble(userId)
     if !able.canAccess and !able.hasImages (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
-    string id = c.Param("id").toStr()
-    string path = "db/" ++ username.toLower() ++ "/blob/" ++ id ++ ".jpg"
-    servePreview(c, path, id, username)
+    string id = c.Param("id")
+    string path = "db/" ++ userId ++ "/blob/" ++ id ++ ".jpg"
+    servePreview(c, path, id, userId)
 )
 
 def handleDeleteImage(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
-    object able = getAble(username)
+    string userId = c.MustGet("userId").toStr()
+    object able = getAble(userId)
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
-    string id = c.Param("id").toStr()
-    string base = "db/" ++ username.toLower()
+    string id = c.Param("id")
+    string base = "db/" ++ userId
     string path = base ++ "/blob/" ++ id ++ ".jpg"
     string binBase = base ++ "/bin"
     if !fs.Exists(binBase) (
@@ -656,9 +683,9 @@ def handleDeleteImage(*gin.Context c) (
             string binPath = binBase ++ "/" ++ id ++ ".jpg"
             bool wrote = img.SaveJPEG(resized, binPath, 90)
             if wrote (
-                array binArr = readUserBin(username)
+                array binArr = readUserBin(userId)
                 number tsms = time.Now().UnixMilli()
-                array arr = readUserImages(username)
+                array arr = readUserImages(userId)
                 object it = findImage(arr, id)
                 number origTs = it.timestamp.toNum()
                 if origTs == 0 (
@@ -666,22 +693,22 @@ def handleDeleteImage(*gin.Context c) (
                 )
                 object entry = { id: id, width: w, height: h, timestamp: origTs, deletedAt: tsms }
                 binArr.append(entry)
-                writeUserBin(username, binArr)
+                writeUserBin(userId, binArr)
             )
         )
     )
     if fs.Exists(path) (
         fs.Remove(path)
     )
-    array arr = readUserImages(username)
+    array arr = readUserImages(userId)
     array out = removeImage(arr, id)
-    writeUserImages(username, out)
+    writeUserImages(userId, out)
     c.JSON(200, { ok: true })
 )
 
 def handleDeleteImages(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
-    object able = getAble(username)
+    string userId = c.MustGet("userId").toStr()
+    object able = getAble(userId)
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
@@ -696,34 +723,34 @@ def handleDeleteImages(*gin.Context c) (
         return
     )
     for i ids.len (
-        fs.Remove("db/" ++ username.toLower() ++ "/blob/" ++ ids[i].toStr() ++ ".jpg")
+        fs.Remove("db/" ++ userId ++ "/blob/" ++ ids[i].toStr() ++ ".jpg")
     )
-    array arr = readUserImages(username)
+    array arr = readUserImages(userId)
     array out = removeImages(arr, ids.assert(array))
-    writeUserImages(username, out)
+    writeUserImages(userId, out)
     c.JSON(200, { ok: true })
 )
 
 def handleBinList(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
-    object able = getAble(username)
+    string userId = c.MustGet("userId").toStr()
+    object able = getAble(userId)
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
-    array arr = readUserBin(username)
+    array arr = readUserBin(userId)
     c.JSON(200, arr)
 )
 
 def handleBinRestore(*gin.Context c) (
-    string username = c.MustGet("username")
-    object able = getAble(username)
+    string userId = c.MustGet("userId")
+    object able = getAble(userId)
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
     string id = c.Param("id")
-    string base = "db/" ++ username.toLower()
+    string base = "db/" ++ userId
     string binPath = base ++ "/bin/" ++ id ++ ".jpg"
     string blobPath = base ++ "/blob/" ++ id ++ ".jpg"
     imgFile := img.Open(binPath)
@@ -746,7 +773,7 @@ def handleBinRestore(*gin.Context c) (
         c.JSON(500, { ok: false, error: "failed to restore" })
         return
     )
-    array binArr = readUserBin(username)
+    array binArr = readUserBin(userId)
     array newBin = []
     number ts = time.Now().UnixMilli()
     for i binArr.len (
@@ -757,29 +784,29 @@ def handleBinRestore(*gin.Context c) (
             ts = it.timestamp.toNum()
         )
     )
-    writeUserBin(username, newBin)
-    array arr = readUserImages(username)
+    writeUserBin(userId, newBin)
+    array arr = readUserImages(userId)
     object entry = { id: id, width: w, height: h, timestamp: ts }
     arr.append(entry)
-    writeUserImages(username, arr)
+    writeUserImages(userId, arr)
     fs.Remove(binPath)
     c.JSON(200, { ok: true })
 )
 
 def handleBinDelete(*gin.Context c) (
-    string username = c.MustGet("username")
-    object able = getAble(username)
+    string userId = c.MustGet("userId")
+    object able = getAble(userId)
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
     string id = c.Param("id")
-    string base = "db/" ++ username.toLower()
+    string base = "db/" ++ userId
     string binPath = base ++ "/bin/" ++ id ++ ".jpg"
     if fs.Exists(binPath) (
         fs.Remove(binPath)
     )
-    array binArr = readUserBin(username)
+    array binArr = readUserBin(userId)
     array newBin = []
     for i binArr.len (
         object it = binArr[i]
@@ -787,21 +814,21 @@ def handleBinDelete(*gin.Context c) (
             newBin.append(it)
         )
     )
-    writeUserBin(username, newBin)
+    writeUserBin(userId, newBin)
     c.JSON(200, { ok: true })
 )
 
 def handleBinEmpty(*gin.Context c) (
-    string username = c.MustGet("username")
-    object able = getAble(username)
+    string userId = c.MustGet("userId")
+    object able = getAble(userId)
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
     
-    writeUserBin(username, [])
+    writeUserBin(userId, [])
     
-    string base = "db/" ++ username.toLower()
+    string base = "db/" ++ userId
     string binDir = base ++ "/bin"
     fs.Remove(binDir)
     fs.Mkdir(binDir)
@@ -810,19 +837,19 @@ def handleBinEmpty(*gin.Context c) (
 )
 
 def handleAlbums(*gin.Context c) (
-    string username = c.MustGet("username")
-    object able = getAble(username)
+    string userId = c.MustGet("userId")
+    object able = getAble(userId)
     if !able.canAccess and !able.hasImages (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
-    object albums = readUserAlbums(username)
+    object albums = readUserAlbums(userId)
     c.JSON(200, albums.albums)
 )
 
 def handleAlbumCreate(*gin.Context c) (
-    string username = c.MustGet("username")
-    object able = getAble(username)
+    string userId = c.MustGet("userId")
+    object able = getAble(userId)
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
@@ -832,33 +859,33 @@ def handleAlbumCreate(*gin.Context c) (
         c.JSON(400, { ok: false, error: "missing name" })
         return
     )
-    object albums = addAlbum(username, name)
+    object albums = addAlbum(userId, name)
     c.JSON(200, albums.albums)
 )
 
 def handleAlbumDelete(*gin.Context c) (
-    string username = c.MustGet("username")
-    object able = getAble(username)
+    string userId = c.MustGet("userId")
+    object able = getAble(userId)
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
     string name = c.Param("name")
-    object albums = removeAlbumDef(username, name)
+    object albums = removeAlbumDef(userId, name)
     c.JSON(200, albums.albums)
 )
 
 def handleAlbumImages(*gin.Context c) (
-    string username = c.MustGet("username")
-    object able = getAble(username)
+    string userId = c.MustGet("userId")
+    object able = getAble(userId)
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
     string name = c.Param("name")
-    object albums = readUserAlbums(username)
+    object albums = readUserAlbums(userId)
     array ids = albums.items[name]
-    array all = readUserImages(username)
+    array all = readUserImages(userId)
     array out = []
     for i ids.len (
         string id = ids[i].toStr()
@@ -871,8 +898,8 @@ def handleAlbumImages(*gin.Context c) (
 )
 
 def handleAlbumAdd(*gin.Context c) (
-    string username = c.MustGet("username")
-    object able = getAble(username)
+    string userId = c.MustGet("userId")
+    object able = getAble(userId)
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
@@ -883,13 +910,13 @@ def handleAlbumAdd(*gin.Context c) (
         c.JSON(400, { ok: false, error: "missing params" })
         return
     )
-    addImageToAlbum(username, name, id)
+    addImageToAlbum(userId, name, id)
     c.JSON(200, { ok: true })
 )
 
 def handleAlbumRemove(*gin.Context c) (
-    string username = c.MustGet("username")
-    object able = getAble(username)
+    string userId = c.MustGet("userId")
+    object able = getAble(userId)
     if !able.canAccess (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
@@ -900,27 +927,27 @@ def handleAlbumRemove(*gin.Context c) (
         c.JSON(400, { ok: false, error: "missing params" })
         return
     )
-    removeImageFromAlbum(username, name, id)
+    removeImageFromAlbum(userId, name, id)
     c.JSON(200, { ok: true })
 )
 
 def handleBinPreview(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
-    object able = getAble(username)
+    string userId = c.MustGet("userId").toStr()
+    object able = getAble(userId)
     if !able.canAccess and !able.hasImages (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
-    string id = c.Param("id").toStr()
-    string path = "db/" ++ username.toLower() ++ "/bin/" ++ id ++ ".jpg"
-    servePreview(c, path, id, username)
+    string id = c.Param("id")
+    string path = "db/" ++ userId ++ "/bin/" ++ id ++ ".jpg"
+    servePreview(c, path, id, userId)
 )
 
 def handleShareInfo(*gin.Context c) (
-    string username = c.MustGet("username").toStr()
+    string userId = c.MustGet("userId").toStr()
     string imageId = c.Param("id")
     
-    object sharesObj = readUserShares(username)
+    object sharesObj = readUserShares(userId)
     array shares = sharesObj.shares
     
     for i shares.len (
@@ -935,18 +962,31 @@ def handleShareInfo(*gin.Context c) (
 )
 
 def handleDirectImage(*gin.Context c) (
-    string owner = c.Param("username").toStr()
-    string id = c.Param("id").toStr()
+    string ownerUsername = c.Param("username")
+    string id = c.Param("id")
     
     string sessionId = c.Cookie("session_id").toArray()[1].toStr()
-    string requestingUser = ""
+    string requestingUserId = ""
     if sessionId != "" and sessions.contains(sessionId) (
-        requestingUser = sessions[sessionId].toStr().toLower()
+        requestingUserId = sessions[sessionId].toStr()
+    )
+    
+    string ownerId = getUserIdFromUsername(ownerUsername)
+    if ownerId == "" (
+        if requestingUserId == "" (
+            c.Redirect(302, "/auth")
+            return
+        )
+        c.HTML(404, "error.html", {
+            "Title": "Not Found",
+            "Message": "User not found."
+        })
+        return
     )
 
-    bool allowed = (owner.toLower() == requestingUser)
+    bool allowed = (ownerId == requestingUserId)
     if !allowed (
-        object sharesObj = readUserShares(owner)
+        object sharesObj = readUserShares(ownerId)
         array shares = sharesObj.shares
         for i shares.len (
             object share = shares[i]
@@ -957,7 +997,7 @@ def handleDirectImage(*gin.Context c) (
                 )
                 array sharedWith = share.sharedWith
                 for j sharedWith.len (
-                    if sharedWith[j].toStr().toLower() == requestingUser (
+                    if sharedWith[j].toStr() == requestingUserId (
                         allowed = true
                         break
                     )
@@ -970,7 +1010,7 @@ def handleDirectImage(*gin.Context c) (
     )
     
     if !allowed (
-        if requestingUser == "" (
+        if requestingUserId == "" (
             c.Redirect(302, "/auth")
             return
         )
@@ -981,9 +1021,9 @@ def handleDirectImage(*gin.Context c) (
         return
     )
 
-    string path = 'db/' ++ owner.toLower() ++ '/blob/' ++ id ++ '.jpg'
+    string path = 'db/' ++ ownerId ++ '/blob/' ++ id ++ '.jpg'
     if !fs.Exists(path) or fs.IsDir(path) (
-        if requestingUser == "" (
+        if requestingUserId == "" (
             c.Redirect(302, "/auth")
             return
         )

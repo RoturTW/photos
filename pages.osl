@@ -1,16 +1,19 @@
 
 def homePage(*gin.Context c) (
-    username := c.MustGet("username").toStr()
+    string userId = c.MustGet("userId").toStr()
+    string username = c.MustGet("username").toStr()
 
-    object profileReq = writeProfile(username)
-    if !profileReq.ok (
-        c.String(401, profileReq.error.toStr())
-        return
+    if !userData.contains(userId) (
+        object profileReq = writeProfile(userId, username)
+        if !profileReq.ok (
+            c.String(401, profileReq.error.toStr())
+            return
+        )
     )
 
     c.HTML(200, "index.html", {
         "Username": username,
-        "Subscription": userData[username.toLower()].subscription,
+        "Subscription": userData[userId].subscription,
     })
 )
 

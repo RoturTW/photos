@@ -18,6 +18,8 @@ import "./handlers.osl"
 
 object sessions = {}
 object userData = {}
+object userIdToUsername = {}
+object usernameToUserId = {}
 
 boolean useSubscriptions = false
 object subscriptionSizes = {}

@@ -15,11 +15,9 @@ import (
 	"math"
 	"runtime"
 	"sort"
-	"crypto/md5"
-	"encoding/hex"
-	"github.com/gin-gonic/gin"
-	"github.com/rwcarlsen/goexif/exif"
+	"unsafe"
 	"path/filepath"
+	"net/http"
 	OSL_bytes "bytes"
 	OSL_image "image"
 	"image/png"
@@ -28,7 +26,10 @@ import (
 	OSL_img_resize "github.com/nfnt/resize"
 	OSL_exif "github.com/rwcarlsen/goexif/exif"
 	OSL_color "image/color"
-	"net/http"
+	"github.com/gin-gonic/gin"
+	"github.com/rwcarlsen/goexif/exif"
+	"crypto/md5"
+	"encoding/hex"
 )
 
 var wincreatetime float64 = OSLcastNumber(time.Now().UnixMilli())
@@ -188,6 +189,137 @@ func OSLcastInt(i any) int {
 	}
 }
 
+func OSLlogValues(values ...any) {
+	for _, v := range values {
+		OSLlog(v)
+	}
+}
+
+func OSLlog(v any) {
+	if v == nil {
+		fmt.Println("null")
+	}
+	switch v := v.(type) {
+	case map[string]any:
+		fmt.Println(JsonStringify(v))
+		return
+	case []any:
+		fmt.Println(JsonStringify(v))
+		return
+	case string, int, float64, bool:
+		fmt.Println(v)
+		return
+	}
+
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Ptr {
+		if rv.IsNil() {
+			fmt.Println("null")
+			return
+		}
+		rv = rv.Elem()
+	}
+
+	if rv.Kind() == reflect.Slice || rv.Kind() == reflect.Array {
+		fmt.Println(JsonStringify(OSLcastArray(v)))
+		return
+	}
+
+	if rv.Kind() == reflect.Map {
+		fmt.Println(JsonStringify(OSLcastObject(v)))
+		return
+	}
+
+	fmt.Println(v)
+}
+
+func OSLisFunc(v any) bool {
+	if v == nil {
+		return false
+	}
+	return reflect.TypeOf(v).Kind() == reflect.Func
+}
+
+func OSLcallFunc(fn any, self any, params []any) any {
+	if fn == nil {
+		return nil
+	}
+
+	if params == nil {
+		params = []any{}
+	}
+
+	if self != nil {
+		params = append([]any{self}, params...)
+	}
+
+	rv := reflect.ValueOf(fn)
+	if rv.Kind() != reflect.Func {
+		panic("OSLcallFunc: invalid type: " + reflect.TypeOf(fn).String())
+	}
+
+	ft := rv.Type()
+	numIn := ft.NumIn()
+
+	isVariadic := ft.IsVariadic()
+
+	args := make([]reflect.Value, 0, len(params))
+
+	for i := range params {
+		var pt reflect.Type
+
+		if isVariadic && i >= numIn-1 {
+			pt = ft.In(numIn - 1).Elem()
+		} else {
+			pt = ft.In(i)
+		}
+
+		var av reflect.Value
+
+		if params[i] == nil {
+			switch pt.Kind() {
+			case reflect.Interface, reflect.Pointer, reflect.Map,
+				reflect.Slice, reflect.Func, reflect.Chan:
+				av = reflect.Zero(pt)
+			default:
+				panic("OSLcallFunc: nil is not assignable to " + pt.String())
+			}
+		} else {
+			av = reflect.ValueOf(params[i])
+
+			at := av.Type()
+
+			if at.AssignableTo(pt) {
+			} else if at.ConvertibleTo(pt) {
+				av = av.Convert(pt)
+			} else if pt.Kind() == reflect.Interface && at.Implements(pt) {
+			} else {
+				panic(
+					"OSLcallFunc: cannot use " + at.String() +
+						" as " + pt.String(),
+				)
+			}
+		}
+
+		args = append(args, av)
+	}
+
+	out := rv.Call(args)
+
+	switch len(out) {
+	case 0:
+		return nil
+	case 1:
+		return out[0].Interface()
+	default:
+		res := make([]any, len(out))
+		for i := range out {
+			res[i] = out[i].Interface()
+		}
+		return res
+	}
+}
+
 func OSLsort(arr []any) []any {
 	if arr == nil {
 		return nil
@@ -199,11 +331,22 @@ func OSLsort(arr []any) []any {
 	return arr
 }
 
-func OSLsortBy(arr []any, key string) []any {
+func OSLsortBy(arr []any, key any) []any {
 	if arr == nil {
 		return nil
 	}
 
+	if OSLisFunc(key) {
+		sort.Slice(arr, func(i, j int) bool {
+			ki := OSLcallFunc(key, nil, []any{arr[i]})
+			kj := OSLcallFunc(key, nil, []any{arr[j]})
+
+			return OSLless(ki, kj)
+		})
+		return arr
+	}
+
+	keyStr := OSLcastString(key)
 	sort.Slice(arr, func(i, j int) bool {
 		ai, ok1 := arr[i].(map[string]any)
 		aj, ok2 := arr[j].(map[string]any)
@@ -212,12 +355,27 @@ func OSLsortBy(arr []any, key string) []any {
 			return false
 		}
 
-		vi, _ := ai[key]
-		vj, _ := aj[key]
+		ki := ai[keyStr]
+		kj := aj[keyStr]
 
-		return OSLcastString(vi) < OSLcastString(vj)
+		return OSLless(ki, kj)
 	})
+
 	return arr
+}
+
+func OSLless(a any, b any) bool {
+	if a == b {
+		return false
+	}
+	return OSLcastString(a) < OSLcastString(b)
+}
+
+func OSLgreater(a any, b any) bool {
+	if a == b {
+		return false
+	}
+	return OSLcastString(a) > OSLcastString(b)
 }
 
 func OSLcastNumber(n any) float64 {
@@ -548,6 +706,10 @@ func OSLtrim(s any, from int, to int) string {
 	return string(str[start:end])
 }
 
+func OSLwait(seconds float64) {
+	time.Sleep(time.Duration(seconds) * time.Second)
+}
+
 func OSLslice(s any, start int, end int) []any {
 	arr := OSLcastArray(s)
 	n := len(arr)
@@ -772,29 +934,51 @@ func OSLsetItem(a any, b any, value any) bool {
 
 	case reflect.Struct:
 		field := v.FieldByName(key)
-		if field.IsValid() && field.CanSet() {
-			val := reflect.ValueOf(value)
-			if val.Type().AssignableTo(field.Type()) {
-				field.Set(val)
-				return true
-			}
+		if !field.IsValid() {
+			return false
 		}
-		return false
+
+		var val reflect.Value
+		if value == nil {
+			val = reflect.Zero(field.Type())
+		} else {
+			val = reflect.ValueOf(value)
+		}
+
+		return setFieldUnsafe(field, val)
 	}
 
 	return false
 }
 
+func setFieldUnsafe(field reflect.Value, val reflect.Value) bool {
+	if !field.CanAddr() {
+		return false
+	}
+
+	if !val.Type().AssignableTo(field.Type()) {
+		if val.Type().ConvertibleTo(field.Type()) {
+			val = val.Convert(field.Type())
+		} else {
+			return false
+		}
+	}
+
+	ptr := unsafe.Pointer(field.UnsafeAddr())
+	reflect.NewAt(field.Type(), ptr).Elem().Set(val)
+	return true
+}
+
 func OSLarrayJoin(a any, b any) string {
-	var out string
+	var out strings.Builder
 	sep := OSLcastString(b)
 	arr := OSLcastArray(a)
 
 	for _, v := range arr {
-		out += OSLcastString(v) + sep
+		out.WriteString(OSLcastString(v) + sep)
 	}
 
-	return strings.TrimSuffix(out, sep)
+	return strings.TrimSuffix(out.String(), sep)
 }
 
 func OSLgetKeys(a any) []any {
@@ -809,10 +993,8 @@ func OSLgetKeys(a any) []any {
 		return keys
 	case []any:
 		keys := make([]any, len(a))
-		i := 0
-		for _, v := range a {
-			keys[i] = OSLcastString(v)
-			i++
+		for i := range a {
+			keys[i] = i
 		}
 		return keys
 	default:
@@ -909,155 +1091,38 @@ func OSLclone(a any) any {
 	}
 }
 
+// worker handling
 
-// name: requests
-// description: HTTP utilities
-// author: Mist
-// requires: net/http, encoding/json, io
+var OSLself any = nil
 
-type HTTP struct {
-	Client *http.Client
-}
-
-func extractHeadersAndBody(data map[string]any) (headers map[string]string, body io.Reader) {
-	headers = make(map[string]string)
-	if data != nil {
-		if raw, ok := data["body"]; ok {
-			switch v := raw.(type) {
-			case string:
-				body = bytes.NewReader([]byte(v))
-			case []byte:
-				body = bytes.NewReader(v)
-			case map[string]any:
-				body = bytes.NewReader([]byte(JsonStringify(v)))
-				headers["Content-Type"] = "application/json"
-			default:
-				buf, _ := json.Marshal(v)
-				body = bytes.NewReader(buf)
-				headers["Content-Type"] = "application/json"
+func OSLworker(props map[string]any) map[string]any {
+	props["createdTime"] = time.Now()
+	props["processTime"] = 0
+	props["alive"] = true
+	props["kill"] = func() {
+		props["alive"] = false
+	}
+	go (func() {
+		OSLself = props
+		OSLcallFunc(props["oncreate"], props, nil)
+		for {
+			startTime := time.Now()
+			OSLself = props
+			OSLcallFunc(props["onframe"], props, nil)
+			props["processTime"] = OSLcastNumber(props["processTime"]) + time.Since(startTime).Seconds()
+			if props["alive"] != true {
+				props["alive"] = false
+				OSLself = props
+				OSLcallFunc(props["onkill"], props, nil)
+				break
 			}
 		}
-
-		for k, v := range data {
-			if k == "body" {
-				continue
-			}
-			headers[k] = OSLcastString(v)
-		}
-	}
-	return headers, body
+	})()
+	return props
 }
 
-func (h *HTTP) doRequest(method, url string, data map[string]any) map[string]any {
-	headers, body := extractHeadersAndBody(data)
 
-	out := make(map[string]any)
-	out["headers"] = nil
-	out["body"] = nil
-	out["raw"] = nil
-	out["status"] = 0
-	out["success"] = false
 
-	req, err := http.NewRequest(method, url, body)
-	if err != nil {
-		return out
-	}
-
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-
-	resp, err := h.Client.Do(req)
-	if err != nil {
-		return out
-	}
-	defer resp.Body.Close()
-
-	respHeaders := make(map[string]any)
-	for k, v := range resp.Header {
-		if len(v) == 1 {
-			respHeaders[k] = v[0]
-		} else {
-			respHeaders[k] = v
-		}
-	}
-
-	out["status"] = resp.StatusCode
-	out["headers"] = respHeaders
-	out["raw"] = resp
-	out["success"] = true
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return out
-	}
-
-	out["body"] = respBody
-
-	return out
-}
-
-func (h *HTTP) Get(url any, data ...map[string]any) map[string]any {
-	var m map[string]any
-	if len(data) > 0 {
-		m = data[0]
-	}
-	return h.doRequest(http.MethodGet, OSLcastString(url), m)
-}
-
-func (h *HTTP) Post(url any, data map[string]any) map[string]any {
-	return h.doRequest(http.MethodPost, OSLcastString(url), data)
-}
-
-func (h *HTTP) Put(url any, data map[string]any) map[string]any {
-	return h.doRequest(http.MethodPut, OSLcastString(url), data)
-}
-
-func (h *HTTP) Patch(url any, data map[string]any) map[string]any {
-	return h.doRequest(http.MethodPatch, OSLcastString(url), data)
-}
-
-func (h *HTTP) Delete(url any, data ...map[string]any) map[string]any {
-	var m map[string]any
-	if len(data) > 0 {
-		m = data[0]
-	}
-	return h.doRequest(http.MethodDelete, OSLcastString(url), m)
-}
-
-func (h *HTTP) Options(url any, data ...map[string]any) map[string]any {
-	var m map[string]any
-	if len(data) > 0 {
-		m = data[0]
-	}
-	return h.doRequest(http.MethodOptions, OSLcastString(url), m)
-}
-
-func (h *HTTP) Head(url any, data ...map[string]any) map[string]any {
-	var m map[string]any
-	if len(data) > 0 {
-		m = data[0]
-	}
-	out := map[string]any{"success": false}
-	headers, _ := extractHeadersAndBody(m)
-	req, err := http.NewRequest(http.MethodHead, OSLcastString(url), nil)
-	if err != nil {
-		return out
-	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	resp, err := h.Client.Do(req)
-	if err != nil {
-		return out
-	}
-	out["status"] = resp.StatusCode
-	defer resp.Body.Close()
-	out["success"] = true
-	return out
-}
-
-var requests = &HTTP{Client: http.DefaultClient}
 // name: img
 // description: Memory-efficient image utilities following Go idioms
 // author: Mist
@@ -1487,6 +1552,154 @@ func (IMG) SaveJPEG(i *OSL_img_Image, path string, quality int) bool {
 }
 
 var img = IMG{}
+// name: requests
+// description: HTTP utilities
+// author: Mist
+// requires: net/http, encoding/json, io
+
+type HTTP struct {
+	Client *http.Client
+}
+
+func extractHeadersAndBody(data map[string]any) (headers map[string]string, body io.Reader) {
+	headers = make(map[string]string)
+	if data != nil {
+		if raw, ok := data["body"]; ok {
+			switch v := raw.(type) {
+			case string:
+				body = bytes.NewReader([]byte(v))
+			case []byte:
+				body = bytes.NewReader(v)
+			case map[string]any:
+				body = bytes.NewReader([]byte(JsonStringify(v)))
+				headers["Content-Type"] = "application/json"
+			default:
+				buf, _ := json.Marshal(v)
+				body = bytes.NewReader(buf)
+				headers["Content-Type"] = "application/json"
+			}
+		}
+
+		for k, v := range data {
+			if k == "body" {
+				continue
+			}
+			headers[k] = OSLcastString(v)
+		}
+	}
+	return headers, body
+}
+
+func (h *HTTP) doRequest(method, url string, data map[string]any) map[string]any {
+	headers, body := extractHeadersAndBody(data)
+
+	out := make(map[string]any)
+	out["headers"] = nil
+	out["body"] = nil
+	out["raw"] = nil
+	out["status"] = 0
+	out["success"] = false
+
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return out
+	}
+
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := h.Client.Do(req)
+	if err != nil {
+		return out
+	}
+	defer resp.Body.Close()
+
+	respHeaders := make(map[string]any)
+	for k, v := range resp.Header {
+		if len(v) == 1 {
+			respHeaders[k] = v[0]
+		} else {
+			respHeaders[k] = v
+		}
+	}
+
+	out["status"] = resp.StatusCode
+	out["headers"] = respHeaders
+	out["raw"] = resp
+	out["success"] = true
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return out
+	}
+
+	out["body"] = respBody
+
+	return out
+}
+
+func (h *HTTP) Get(url any, data ...map[string]any) map[string]any {
+	var m map[string]any
+	if len(data) > 0 {
+		m = data[0]
+	}
+	return h.doRequest(http.MethodGet, OSLcastString(url), m)
+}
+
+func (h *HTTP) Post(url any, data map[string]any) map[string]any {
+	return h.doRequest(http.MethodPost, OSLcastString(url), data)
+}
+
+func (h *HTTP) Put(url any, data map[string]any) map[string]any {
+	return h.doRequest(http.MethodPut, OSLcastString(url), data)
+}
+
+func (h *HTTP) Patch(url any, data map[string]any) map[string]any {
+	return h.doRequest(http.MethodPatch, OSLcastString(url), data)
+}
+
+func (h *HTTP) Delete(url any, data ...map[string]any) map[string]any {
+	var m map[string]any
+	if len(data) > 0 {
+		m = data[0]
+	}
+	return h.doRequest(http.MethodDelete, OSLcastString(url), m)
+}
+
+func (h *HTTP) Options(url any, data ...map[string]any) map[string]any {
+	var m map[string]any
+	if len(data) > 0 {
+		m = data[0]
+	}
+	return h.doRequest(http.MethodOptions, OSLcastString(url), m)
+}
+
+func (h *HTTP) Head(url any, data ...map[string]any) map[string]any {
+	var m map[string]any
+	if len(data) > 0 {
+		m = data[0]
+	}
+	out := map[string]any{"success": false}
+	headers, _ := extractHeadersAndBody(m)
+	req, err := http.NewRequest(http.MethodHead, OSLcastString(url), nil)
+	if err != nil {
+		return out
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := h.Client.Do(req)
+	if err != nil {
+		return out
+	}
+	out["status"] = resp.StatusCode
+	defer resp.Body.Close()
+	out["success"] = true
+	return out
+}
+
+var requests = &HTTP{Client: http.DefaultClient}
 // name: fs
 // description: File system utilities
 // author: Mist
@@ -1765,1105 +1978,10 @@ func (FS) EvalSymlinks(path any) string {
 
 // Global instance
 var fs = FS{}
-func handleAuth(c *gin.Context) {
-  var token string = OSLcastString(c.Query("v"))
-  if OSLequal(token, "") {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "missing token",
-    })
-    return
-  }
-  var resp map[string]any = OSLcastObject(requests.Get(("https://api.rotur.dev/validate?key=rotur-photos&v=" + token)))
-  if (OSLgetItem(resp, "success") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "failed to validate token",
-    })
-    return
-  }
-  var json map[string]any = OSLcastObject(JsonParse(OSLcastString(OSLgetItem(resp, "body"))))
-  if OSLnotEqual(OSLgetItem(json, "error"), nil) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": OSLgetItem(json, "error"),
-    })
-    return
-  }
-  if (OSLgetItem(json, "valid") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "invalidate token",
-    })
-    return
-  }
-  var sessionId string = OSLcastString(randomString(32))
-  var username string = OSLcastString(OSLgetItem(OSLSplit(token, ","), 1))
-  OSLsetItem(sessions, sessionId, username)
-  var profileReq map[string]any = OSLcastObject(writeProfile(username))
-  if (OSLgetItem(profileReq, "ok") != true) {
-    c.JSON(401, OSLgetItem(profileReq, "error"))
-    return
-  }
-  fs.WriteFile("db/sessions.json", JsonFormat(sessions))
-  c.SetCookie("session_id", sessionId, 86400, "/", "", false, true)
-  c.JSON(200,  map[string]any{
-    "ok": true,
-    "token": token,
-  })
-}
-func handleLogout(c *gin.Context) {
-  var sessionId string = OSLcastString(OSLgetItem(OSLcastArray(c.Cookie("session_id")), 1))
-  if OSLnotEqual(sessionId, "") && OSLcontains(sessions, sessionId) {
-    OSLdelete(sessions, sessionId)
-    fs.WriteFile("db/sessions.json", JsonFormat(sessions))
-  }
-  c.SetCookie("session_id", "", -1, "/", "", false, true)
-  c.JSON(200,  map[string]any{
-    "ok": true,
-  })
-}
-func handleAble(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  c.JSON(200, able)
-}
-func handleStorage(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var stats map[string]any = OSLcastObject(calculateStorageStats(username))
-  OSLsetItem(stats, "quota", OSLgetItem(able, "storageQuota"))
-  c.JSON(200, stats)
-}
-func handleAllImages(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) && (OSLgetItem(able, "hasImages") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var images []any = OSLcastArray(readUserImages(username))
-  images = enrichImagesWithSharing(username, images)
-  c.JSON(200, images)
-}
-func handleRecentImages(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var arr []any = OSLcastArray(readUserImages(username))
-  var n int = OSLlen(arr)
-  var nowMs float64 = OSLcastNumber(time.Now().UnixMilli())
-  var ninety float64 = OSLcastNumber(OSLmultiply(OSLmultiply(OSLmultiply(OSLmultiply(90, 24), 60), 60), 1000))
-  var out []any = []any{}
-  for i := 1; i <= OSLround(n); i++ {
-    var it map[string]any = OSLcastObject(OSLgetItem(arr, i))
-    var ts float64 = OSLcastNumber(OSLgetItem(it, "timestamp"))
-    if OSLcastNumber(OSLsub(nowMs, ts)) <= OSLcastNumber(ninety) {
-      OSLappend(&(out), it)
-    }
-  }
-  out = enrichImagesWithSharing(username, out)
-  c.JSON(200, out)
-}
-func handleYearImages(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var year int = OSLcastInt(c.Param("year"))
-  var arr []any = OSLcastArray(readUserImages(username))
-  var n int = OSLlen(arr)
-  var out []any = []any{}
-  for i := 1; i <= OSLround(n); i++ {
-    var it map[string]any = OSLcastObject(OSLgetItem(arr, i))
-    var ts int = OSLcastInt(OSLgetItem(it, "timestamp"))
-    var t = time.UnixMilli(int64(ts))
-    if OSLequal(t.Year(), year) {
-      OSLappend(&(out), it)
-    }
-  }
-  out = enrichImagesWithSharing(username, out)
-  c.JSON(200, out)
-}
-func handleMonthImages(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var year int = OSLcastInt(c.Param("year"))
-  var month int = OSLcastInt(c.Param("month"))
-  var arr []any = OSLcastArray(readUserImages(username))
-  var n int = OSLlen(arr)
-  var out []any = []any{}
-  for i := 1; i <= OSLround(n); i++ {
-    var it map[string]any = OSLcastObject(OSLgetItem(arr, i))
-    var ts int = OSLcastInt(OSLgetItem(it, "timestamp"))
-    var t = time.UnixMilli(int64(ts))
-    var tMonth int = int(0)
-    tMonth = int(t.Month())
-    if OSLequal(t.Year(), year) && OSLequal(tMonth, month) {
-      OSLappend(&(out), it)
-    }
-  }
-  out = enrichImagesWithSharing(username, out)
-  c.JSON(200, out)
-}
-func handleUpload(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var base string = (("db/" + strings.ToLower(username)) + "/blob")
-  if (fs.Exists(base) != true) {
-    fs.MkdirAll(base)
-  }
-  var tmpPath string = ((base + "/tmp-") + randomString(16))
-  var body []byte = OSLgetItem(OSLcastArray(c.GetRawData()), 1).([]byte)
-  if OSLequal(OSLlen(body), 0) {
-    c.JSON(400,  map[string]any{
-      "ok": false,
-      "error": "empty body",
-    })
-    return
-  }
-  var stats map[string]any = OSLcastObject(calculateStorageStats(username))
-  if OSLcastNumber(((OSLcastNumber(OSLgetItem(stats, "totalBytes")) + OSLcastNumber(OSLgetItem(stats, "binBytes"))) + float64(OSLlen(body)))) > OSLcastNumber(OSLcastNumber(OSLgetItem(able, "storageQuota"))) {
-    c.JSON(403,  map[string]any{
-      "ok": false,
-      "error": "storage quota exceeded",
-    })
-    return
-  }
-  if (fs.WriteFile(tmpPath, body) != true) {
-    c.JSON(500,  map[string]any{
-      "ok": false,
-      "error": "failed to write upload",
-    })
-    return
-  }
-  var im = img.Open(tmpPath)
-  if OSLequal(im, nil) {
-    fs.Remove(tmpPath)
-    c.JSON(400,  map[string]any{
-      "ok": false,
-      "error": "invalid image",
-    })
-    return
-  }
-  var size map[string]any = OSLcastObject(im.Size())
-  var w int = OSLround(OSLgetItem(size, "w"))
-  var h int = OSLround(OSLgetItem(size, "h"))
-  if OSLcastNumber(w) > OSLcastNumber(OSLgetItem(downscaleWhen, "width")) || OSLcastNumber(h) > OSLcastNumber(OSLgetItem(downscaleWhen, "height")) {
-    var ratio float64 = OSLcastNumber(OSLmin(OSLdivide(OSLcastInt(OSLgetItem(downscaleWhen, "width")), w), OSLdivide(OSLcastInt(OSLgetItem(downscaleWhen, "height")), h)))
-    w = OSLround(OSLmultiply(w, ratio))
-    h = OSLround(OSLmultiply(h, ratio))
-    var resized = img.Resize(im, w, h)
-    im.Close()
-    if OSLequal(resized, nil) {
-      fs.Remove(tmpPath)
-      c.JSON(500,  map[string]any{
-        "ok": false,
-        "error": "resize failed",
-      })
-      return
-    }
-    im = resized
-  }
-  var id string = OSLcastString(randomString(24))
-  var outPath string = (((base + "/") + id) + ".jpg")
-  if (img.SaveJPEG(im, outPath, 90) != true) {
-    im.Close()
-    fs.Remove(tmpPath)
-    c.JSON(500,  map[string]any{
-      "ok": false,
-      "error": "save failed",
-    })
-    return
-  }
-  im.Close()
-  var tsms float64 = OSLcastNumber(time.Now().UnixMilli())
-  var x *exif.Exif = nil
-  f, err := os.Open(tmpPath)
-  if OSLequal(err, nil) {
-    defer f.Close()
-    x, err = exif.Decode(f)
-    if OSLequal(err, nil) {
-      t, err := x.DateTime()
-      if OSLequal(err, nil) && (t.IsZero() != true) {
-        tsms = OSLcastNumber(t.UnixMilli())
-      }
-    }
-  }
-  var entry map[string]any =  map[string]any{
-    "id": id,
-    "width": w,
-    "height": h,
-    "timestamp": tsms,
-    "make": "",
-    "model": "",
-    "exposure_time": "",
-    "f_number": "",
-  }
-  if OSLnotEqual(x, nil) {
-    if tag, err := x.Get(exif.Make); err == nil { entry["make"], _ = tag.StringVal() }
-    if tag, err := x.Get(exif.Model); err == nil { entry["model"], _ = tag.StringVal() }
-    if tag, err := x.Get(exif.ExposureTime); err == nil { entry["exposure_time"], _ = tag.StringVal() }
-    if tag, err := x.Get(exif.FNumber); err == nil { entry["f_number"], _ = tag.StringVal() }
-  }
-  fs.Remove(tmpPath)
-  var images []any = OSLcastArray(readUserImages(username))
-  OSLappend(&(images), entry)
-  writeUserImages(username, images)
-  c.JSON(200,  map[string]any{
-    "ok": true,
-    "id": id,
-  })
-}
-func handleId(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var id string = OSLcastString(c.Param("id"))
-  var json bool = false
-  if strings.HasSuffix(id, ".json") {
-    id = OSLtrim(id, 1, -6)
-    json = true
-  }
-  if json {
-    var it map[string]any = OSLcastObject(findImage(readUserImages(username), id))
-    if OSLequal(OSLgetItem(it, "id"), nil) {
-      c.JSON(404,  map[string]any{
-        "ok": false,
-        "error": "not found",
-      })
-      return
-    }
-    c.JSON(200, it)
-    return
-  }
-  var path string = (((("db/" + strings.ToLower(username)) + "/blob/") + id) + ".jpg")
-  if (fs.Exists(path) != true) || fs.IsDir(path) {
-    c.JSON(404,  map[string]any{
-      "ok": false,
-      "error": "not found",
-    })
-    return
-  }
-  var fileInfo map[string]any = OSLcastObject(fs.GetStat(path))
-  var etag string = (("\"" + OSLcastString(OSLgetItem(fileInfo, "modTime"))) + "\"")
-  var ifNoneMatch string = OSLcastString(c.GetHeader("If-None-Match"))
-  if OSLequal(ifNoneMatch, etag) {
-    c.Status(304)
-    return
-  }
-  c.Header("ETag", etag)
-  c.Header("Cache-Control", "private, must-revalidate")
-  c.File(path)
-}
-func handleImageRotate(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var id string = OSLcastString(c.Param("id"))
-  var body map[string]any = OSLcastObject(JsonParse(OSLcastString(OSLgetItem(OSLgetItem(c, "Request"), "Body"))))
-  var angle float64 = OSLcastNumber(OSLgetItem(body, "angle"))
-  var path string = (((("db/" + strings.ToLower(username)) + "/blob/") + id) + ".jpg")
-  if (fs.Exists(path) != true) || fs.IsDir(path) {
-    c.JSON(404,  map[string]any{
-      "ok": false,
-      "error": "not found",
-    })
-    return
-  }
-  var imgFile = img.Open(path)
-  if OSLequal(imgFile, nil) {
-    c.JSON(400,  map[string]any{
-      "ok": false,
-      "error": "invalid image",
-    })
-    return
-  }
-  defer imgFile.Close()
-  var rotated = img.Rotate(imgFile, angle)
-  if OSLequal(rotated, nil) {
-    c.JSON(500,  map[string]any{
-      "ok": false,
-      "error": "failed to rotate",
-    })
-    return
-  }
-  defer rotated.Close()
-  var wrote bool = bool(img.SaveJPEG(rotated, path, 90))
-  if (wrote != true) {
-    c.JSON(500,  map[string]any{
-      "ok": false,
-      "error": "failed to save",
-    })
-    return
-  }
-  var arr []any = OSLcastArray(readUserImages(username))
-  var it map[string]any = OSLcastObject(findImage(arr, id))
-  if OSLnotEqual(OSLgetItem(it, "id"), nil) {
-    if OSLequal(angle, 90) || OSLequal(angle, 270) {
-      var oldW float64 = OSLcastNumber(OSLgetItem(it, "width"))
-      OSLsetItem(it, "width", OSLgetItem(it, "height"))
-      OSLsetItem(it, "height", oldW)
-      writeUserImages(username, arr)
-    }
-  }
-  c.JSON(200,  map[string]any{
-    "ok": true,
-  })
-}
-func handleSearch(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var q string = strings.ToLower(OSLcastString(c.Query("q")))
-  var arr []any = OSLcastArray(readUserImages(username))
-  if OSLequal(q, "") {
-    c.JSON(200, arr)
-    return
-  }
-  var months []any = []any{
-    "january",
-    "february",
-    "march",
-    "april",
-    "may",
-    "june",
-    "july",
-    "august",
-    "september",
-    "october",
-    "november",
-    "december",
-  }
-  var albums map[string]any = OSLcastObject(readUserAlbums(username))
-  var out []any = []any{}
-  var n int = OSLlen(arr)
-  for i := 1; i <= OSLround(n); i++ {
-    var it map[string]any = OSLcastObject(OSLgetItem(arr, i))
-    var match bool = false
-    var ts float64 = OSLcastNumber(OSLgetItem(it, "timestamp"))
-    if OSLcastNumber(ts) > OSLcastNumber(0) {
-      var t = time.UnixMilli(int64(ts))
-      var year int = OSLcastInt(t.Year())
-      var month int = OSLcastInt(int(t.Month()))
-      if OSLcontains(q, OSLcastString(year)) {
-        match = true
-      }
-      if OSLcastNumber(month) > OSLcastNumber(0) && OSLcastNumber(month) <= OSLcastNumber(12) {
-        var monthName string = OSLcastString(OSLgetItem(months, month))
-        if OSLcontains(q, monthName) {
-          match = true
-        }
-      }
-    }
-    var make string = strings.ToLower(OSLcastString(OSLgetItem(it, "make")))
-    var model string = strings.ToLower(OSLcastString(OSLgetItem(it, "model")))
-    if OSLnotEqual(make, "") && OSLcontains(q, make) {
-      match = true
-    }
-    if OSLnotEqual(model, "") && OSLcontains(q, model) {
-      match = true
-    }
-    var items map[string]any = OSLcastObject(OSLgetItem(albums, "items"))
-    for j := 1; j <= OSLlen(OSLgetItem(albums, "albums")); j++ {
-      var albumName string = OSLcastString(OSLgetItem(OSLgetItem(albums, "albums"), j))
-      if OSLcontains(strings.ToLower(albumName), q) {
-        var albumIds []any = OSLcastArray(OSLgetItem(items, albumName))
-        for k := 1; k <= OSLlen(albumIds); k++ {
-          if OSLequal(OSLcastString(OSLgetItem(albumIds, k)), OSLcastString(OSLgetItem(it, "id"))) {
-            match = true
-          }
-        }
-      }
-    }
-    if match {
-      OSLappend(&(out), it)
-    }
-  }
-  c.JSON(200, out)
-}
-func handleShareMine(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var sharesObj map[string]any = OSLcastObject(readUserShares(username))
-  var shares []any = OSLcastArray(OSLgetItem(sharesObj, "shares"))
-  var images []any = OSLcastArray(readUserImages(username))
-  var out []any = []any{}
-  for i := 1; i <= OSLlen(shares); i++ {
-    var share map[string]any = OSLcastObject(OSLgetItem(shares, i))
-    var imageId string = OSLcastString(OSLgetItem(share, "imageId"))
-    var img map[string]any = OSLcastObject(findImage(images, imageId))
-    if OSLnotEqual(OSLgetItem(img, "id"), nil) {
-      OSLsetItem(img, "sharedWith", OSLgetItem(share, "sharedWith"))
-      OSLappend(&(out), img)
-    }
-  }
-  c.JSON(200, out)
-}
-func handleShareOthers(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var sharedWithMe []any = OSLcastArray(getSharedWithMe(username))
-  var results []any = []any{}
-  for i := 1; i <= OSLlen(sharedWithMe); i++ {
-    var item map[string]any = OSLcastObject(OSLgetItem(sharedWithMe, i))
-    var owner string = OSLcastString(OSLgetItem(item, "owner"))
-    var imageId string = OSLcastString(OSLgetItem(item, "imageId"))
-    var ownerImages []any = OSLcastArray(readUserImages(owner))
-    var img map[string]any = OSLcastObject(findImage(ownerImages, imageId))
-    if OSLnotEqual(OSLgetItem(img, "id"), nil) {
-      OSLsetItem(img, "owner", owner)
-      OSLappend(&(results), img)
-    }
-  }
-  c.JSON(200, results)
-}
-func handleSharePatch(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var imageId string = OSLcastString(c.Param("id"))
-  var body map[string]any = OSLcastObject(JsonParse(OSLcastString(OSLgetItem(OSLgetItem(c, "Request"), "Body"))))
-  var add []any = OSLcastArray(OSLgetItem(body, "add"))
-  var remove []any = OSLcastArray(OSLgetItem(body, "remove"))
-  if OSLequal(add, nil) {
-    add = []any{}
-  }
-  if OSLequal(remove, nil) {
-    remove = []any{}
-  }
-  for i := 1; i <= OSLlen(add); i++ {
-    addShare(username, imageId, OSLcastString(OSLgetItem(add, i)))
-  }
-  for i := 1; i <= OSLlen(remove); i++ {
-    removeShare(username, imageId, OSLcastString(OSLgetItem(remove, i)))
-  }
-  if OSLnotEqual(OSLgetItem(body, "isPublic"), nil) {
-    setPublicShare(username, imageId, OSLcastBool(OSLgetItem(body, "isPublic")))
-  }
-  c.JSON(200,  map[string]any{
-    "ok": true,
-  })
-}
-func handleShareCreate(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var body map[string]any = OSLcastObject(JsonParse(OSLcastString(OSLgetItem(OSLgetItem(c, "Request"), "Body"))))
-  var imageId string = OSLcastString(OSLgetItem(body, "imageId"))
-  var targetUser string = OSLcastString(OSLgetItem(body, "username"))
-  if OSLequal(imageId, "") || OSLequal(targetUser, "") {
-    c.JSON(400,  map[string]any{
-      "ok": false,
-      "error": "missing imageId or username",
-    })
-    return
-  }
-  var images []any = OSLcastArray(readUserImages(username))
-  var img map[string]any = OSLcastObject(findImage(images, imageId))
-  if OSLequal(OSLgetItem(img, "id"), nil) {
-    c.JSON(404,  map[string]any{
-      "ok": false,
-      "error": "image not found",
-    })
-    return
-  }
-  addShare(username, imageId, targetUser)
-  c.JSON(200,  map[string]any{
-    "ok": true,
-  })
-}
-func handleSharedImage(c *gin.Context) {
-  var owner string = OSLcastString(c.Param("owner"))
-  var id string = OSLcastString(c.Param("id"))
-  var requestingUser string = ""
-  var sessionId string = OSLcastString(OSLgetItem(OSLcastArray(c.Cookie("session_id")), 1))
-  if OSLnotEqual(sessionId, "") && OSLcontains(sessions, sessionId) {
-    requestingUser = strings.ToLower(OSLcastString(OSLgetItem(sessions, sessionId)))
-  }
-  var sharesObj map[string]any = OSLcastObject(readUserShares(owner))
-  var shares []any = OSLcastArray(OSLgetItem(sharesObj, "shares"))
-  var allowed bool = false
-  if OSLequal(requestingUser, strings.ToLower(owner)) {
-    allowed = true
-  }
-  for i := 1; i <= OSLlen(shares); i++ {
-    var share map[string]any = OSLcastObject(OSLgetItem(shares, i))
-    if OSLequal(OSLcastString(OSLgetItem(share, "imageId")), id) {
-      var sharedWith []any = OSLcastArray(OSLgetItem(share, "sharedWith"))
-      for j := 1; j <= OSLlen(sharedWith); j++ {
-        if OSLequal(strings.ToLower(OSLcastString(OSLgetItem(sharedWith, j))), requestingUser) {
-          allowed = true
-        }
-      }
-    }
-  }
-  if (allowed != true) {
-    c.JSON(403,  map[string]any{
-      "ok": false,
-      "error": "not authorized to view this image",
-    })
-    return
-  }
-  var path string = (((("db/" + strings.ToLower(owner)) + "/blob/") + id) + ".jpg")
-  if (fs.Exists(path) != true) {
-    c.JSON(404,  map[string]any{
-      "ok": false,
-      "error": "not found",
-    })
-    return
-  }
-  c.File(path)
-}
-func handleSharedImageInfo(c *gin.Context) {
-  var owner string = OSLcastString(c.Param("owner"))
-  var id string = OSLcastString(c.Param("id"))
-  var requestingUser string = ""
-  var sessionId string = OSLcastString(OSLgetItem(OSLcastArray(c.Cookie("session_id")), 1))
-  if OSLnotEqual(sessionId, "") && OSLcontains(sessions, sessionId) {
-    requestingUser = strings.ToLower(OSLcastString(OSLgetItem(sessions, sessionId)))
-  }
-  var sharesObj map[string]any = OSLcastObject(readUserShares(owner))
-  var shares []any = OSLcastArray(OSLgetItem(sharesObj, "shares"))
-  var allowed bool = false
-  if OSLequal(requestingUser, strings.ToLower(owner)) {
-    allowed = true
-  }
-  for i := 1; i <= OSLlen(shares); i++ {
-    var share map[string]any = OSLcastObject(OSLgetItem(shares, i))
-    if OSLequal(OSLcastString(OSLgetItem(share, "imageId")), id) {
-      var sharedWith []any = OSLcastArray(OSLgetItem(share, "sharedWith"))
-      for j := 1; j <= OSLlen(sharedWith); j++ {
-        if OSLequal(strings.ToLower(OSLcastString(OSLgetItem(sharedWith, j))), requestingUser) {
-          allowed = true
-        }
-      }
-    }
-  }
-  if (allowed != true) {
-    c.JSON(403,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var images []any = OSLcastArray(readUserImages(owner))
-  var img map[string]any = OSLcastObject(findImage(images, id))
-  if OSLequal(OSLgetItem(img, "id"), nil) {
-    c.JSON(404,  map[string]any{
-      "ok": false,
-      "error": "not found",
-    })
-    return
-  }
-  OSLsetItem(img, "owner", owner)
-  c.JSON(200, img)
-}
-func handlePreview(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) && (OSLgetItem(able, "hasImages") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var id string = OSLcastString(c.Param("id"))
-  var path string = (((("db/" + strings.ToLower(username)) + "/blob/") + id) + ".jpg")
-  servePreview(c, path, id, username)
-}
-func handleDeleteImage(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var id string = OSLcastString(c.Param("id"))
-  var base string = ("db/" + strings.ToLower(username))
-  var path string = (((base + "/blob/") + id) + ".jpg")
-  var binBase string = (base + "/bin")
-  if (fs.Exists(binBase) != true) {
-    fs.MkdirAll(binBase)
-  }
-  var data []byte = fs.ReadFileBytes(path)
-  if OSLcastNumber(OSLlen(data)) > OSLcastNumber(0) {
-    var imgFile = img.DecodeBytes(data)
-    if OSLnotEqual(imgFile, nil) {
-      var s map[string]any = OSLcastObject(imgFile.Size())
-      var w int = OSLround(OSLgetItem(s, "w"))
-      var h int = OSLround(OSLgetItem(s, "h"))
-      var resized = img.Resize(imgFile, w, h)
-      if OSLequal(resized, nil) {
-        c.JSON(500,  map[string]any{
-          "ok": false,
-          "error": "resize failed",
-        })
-        return
-      }
-      var binPath string = (((binBase + "/") + id) + ".jpg")
-      var wrote bool = img.SaveJPEG(resized, binPath, 90)
-      if wrote {
-        var binArr []any = OSLcastArray(readUserBin(username))
-        var tsms float64 = OSLcastNumber(time.Now().UnixMilli())
-        var arr []any = OSLcastArray(readUserImages(username))
-        var it map[string]any = OSLcastObject(findImage(arr, id))
-        var origTs float64 = OSLcastNumber(OSLgetItem(it, "timestamp"))
-        if OSLequal(origTs, 0) {
-          origTs = tsms
-        }
-        var entry map[string]any =  map[string]any{
-          "id": id,
-          "width": w,
-          "height": h,
-          "timestamp": origTs,
-          "deletedAt": tsms,
-        }
-        OSLappend(&(binArr), entry)
-        writeUserBin(username, binArr)
-      }
-    }
-  }
-  if fs.Exists(path) {
-    fs.Remove(path)
-  }
-  var arr []any = OSLcastArray(readUserImages(username))
-  var out []any = OSLcastArray(removeImage(arr, id))
-  writeUserImages(username, out)
-  c.JSON(200,  map[string]any{
-    "ok": true,
-  })
-}
-func handleDeleteImages(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var ids any = OSLgetItem(JsonParse(OSLcastString(OSLgetItem(OSLgetItem(c, "request"), "body"))), "ids")
-  if OSLequal(OSLlen(ids), 0) {
-    c.JSON(400,  map[string]any{
-      "ok": false,
-      "error": "missing ids",
-    })
-    return
-  }
-  if OSLnotEqual(OSLtypeof(ids), "array") {
-    c.JSON(400,  map[string]any{
-      "ok": false,
-      "error": "invalid ids",
-    })
-    return
-  }
-  var arr []any = OSLcastArray(readUserImages(username))
-  var out []any = OSLcastArray(removeImages(arr, ids.([]any)))
-  writeUserImages(username, out)
-  c.JSON(200,  map[string]any{
-    "ok": true,
-  })
-}
-func handleBinList(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var arr []any = OSLcastArray(readUserBin(username))
-  c.JSON(200, arr)
-}
-func handleBinRestore(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var id string = OSLcastString(c.Param("id"))
-  var base string = ("db/" + strings.ToLower(username))
-  var binPath string = (((base + "/bin/") + id) + ".jpg")
-  var blobPath string = (((base + "/blob/") + id) + ".jpg")
-  var imgFile = img.Open(binPath)
-  if OSLequal(imgFile, nil) {
-    c.JSON(404,  map[string]any{
-      "ok": false,
-      "error": "not found",
-    })
-    return
-  }
-  defer imgFile.Close()
-  var size map[string]any = OSLcastObject(imgFile.Size())
-  var w int = OSLround(OSLgetItem(size, "w"))
-  var h int = OSLround(OSLgetItem(size, "h"))
-  var resized = img.Resize(imgFile, w, h)
-  if OSLequal(resized, nil) {
-    c.JSON(500,  map[string]any{
-      "ok": false,
-      "error": "failed to resize",
-    })
-    return
-  }
-  defer resized.Close()
-  var wrote bool = img.SaveJPEG(resized, blobPath, 90)
-  if (wrote != true) {
-    c.JSON(500,  map[string]any{
-      "ok": false,
-      "error": "failed to restore",
-    })
-    return
-  }
-  var binArr []any = OSLcastArray(readUserBin(username))
-  var newBin []any = []any{}
-  var ts float64 = OSLcastNumber(time.Now().UnixMilli())
-  for i := 1; i <= OSLlen(binArr); i++ {
-    var it map[string]any = OSLcastObject(OSLgetItem(binArr, i))
-    if OSLnotEqual(OSLcastString(OSLgetItem(it, "id")), id) {
-      OSLappend(&(newBin), it)
-    } else {
-      ts = OSLcastNumber(OSLgetItem(it, "timestamp"))
-    }
-  }
-  writeUserBin(username, newBin)
-  var arr []any = OSLcastArray(readUserImages(username))
-  var entry map[string]any =  map[string]any{
-    "id": id,
-    "width": w,
-    "height": h,
-    "timestamp": ts,
-  }
-  OSLappend(&(arr), entry)
-  writeUserImages(username, arr)
-  fs.Remove(binPath)
-  c.JSON(200,  map[string]any{
-    "ok": true,
-  })
-}
-func handleBinDelete(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var id string = OSLcastString(c.Param("id"))
-  var base string = ("db/" + strings.ToLower(username))
-  var binPath string = (((base + "/bin/") + id) + ".jpg")
-  if fs.Exists(binPath) {
-    fs.Remove(binPath)
-  }
-  var binArr []any = OSLcastArray(readUserBin(username))
-  var newBin []any = []any{}
-  for i := 1; i <= OSLlen(binArr); i++ {
-    var it map[string]any = OSLcastObject(OSLgetItem(binArr, i))
-    if OSLnotEqual(OSLcastString(OSLgetItem(it, "id")), id) {
-      OSLappend(&(newBin), it)
-    }
-  }
-  writeUserBin(username, newBin)
-  c.JSON(200,  map[string]any{
-    "ok": true,
-  })
-}
-func handleBinEmpty(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  writeUserBin(username, []any{})
-  var base string = ("db/" + strings.ToLower(username))
-  var binDir string = (base + "/bin")
-  fs.Remove(binDir)
-  fs.Mkdir(binDir)
-  c.JSON(200,  map[string]any{
-    "ok": true,
-  })
-}
-func handleAlbums(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) && (OSLgetItem(able, "hasImages") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var albums map[string]any = OSLcastObject(readUserAlbums(username))
-  c.JSON(200, OSLgetItem(albums, "albums"))
-}
-func handleAlbumCreate(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var name string = OSLcastString(c.Query("name"))
-  if OSLequal(name, "") {
-    c.JSON(400,  map[string]any{
-      "ok": false,
-      "error": "missing name",
-    })
-    return
-  }
-  var albums map[string]any = OSLcastObject(addAlbum(username, name))
-  c.JSON(200, OSLgetItem(albums, "albums"))
-}
-func handleAlbumDelete(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var name string = OSLcastString(c.Param("name"))
-  var albums map[string]any = OSLcastObject(removeAlbumDef(username, name))
-  c.JSON(200, OSLgetItem(albums, "albums"))
-}
-func handleAlbumImages(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var name string = OSLcastString(c.Param("name"))
-  var albums map[string]any = OSLcastObject(readUserAlbums(username))
-  var ids []any = OSLcastArray(OSLgetItem(OSLgetItem(albums, "items"), name))
-  var all []any = OSLcastArray(readUserImages(username))
-  var out []any = []any{}
-  for i := 1; i <= OSLlen(ids); i++ {
-    var id string = OSLcastString(OSLgetItem(ids, i))
-    var it map[string]any = OSLcastObject(findImage(all, id))
-    if OSLnotEqual(OSLgetItem(it, "id"), nil) {
-      OSLappend(&(out), it)
-    }
-  }
-  c.JSON(200, out)
-}
-func handleAlbumAdd(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var name string = OSLcastString(c.Param("name"))
-  var id string = OSLcastString(c.Query("id"))
-  if OSLequal(name, "") || OSLequal(id, "") {
-    c.JSON(400,  map[string]any{
-      "ok": false,
-      "error": "missing params",
-    })
-    return
-  }
-  addImageToAlbum(username, name, id)
-  c.JSON(200,  map[string]any{
-    "ok": true,
-  })
-}
-func handleAlbumRemove(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var name string = OSLcastString(c.Param("name"))
-  var id string = OSLcastString(c.Query("id"))
-  if OSLequal(name, "") || OSLequal(id, "") {
-    c.JSON(400,  map[string]any{
-      "ok": false,
-      "error": "missing params",
-    })
-    return
-  }
-  removeImageFromAlbum(username, name, id)
-  c.JSON(200,  map[string]any{
-    "ok": true,
-  })
-}
-func handleBinPreview(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var able map[string]any = OSLcastObject(getAble(username))
-  if (OSLgetItem(able, "canAccess") != true) && (OSLgetItem(able, "hasImages") != true) {
-    c.JSON(401,  map[string]any{
-      "ok": false,
-      "error": "not authorized",
-    })
-    return
-  }
-  var id string = OSLcastString(c.Param("id"))
-  var path string = (((("db/" + strings.ToLower(username)) + "/bin/") + id) + ".jpg")
-  servePreview(c, path, id, username)
-}
-func handleShareInfo(c *gin.Context) {
-  var username string = OSLcastString(c.MustGet("username"))
-  var imageId string = OSLcastString(c.Param("id"))
-  var sharesObj map[string]any = OSLcastObject(readUserShares(username))
-  var shares []any = OSLcastArray(OSLgetItem(sharesObj, "shares"))
-  for i := 1; i <= OSLlen(shares); i++ {
-    var share map[string]any = OSLcastObject(OSLgetItem(shares, i))
-    if OSLequal(OSLcastString(OSLgetItem(share, "imageId")), imageId) {
-      c.JSON(200,  map[string]any{
-        "ok": true,
-        "sharedWith": OSLgetItem(share, "sharedWith"),
-        "isPublic": OSLgetItem(share, "isPublic"),
-      })
-      return
-    }
-  }
-  c.JSON(200,  map[string]any{
-    "ok": true,
-    "sharedWith": []any{},
-  })
-}
-func handleDirectImage(c *gin.Context) {
-  var owner string = OSLcastString(c.Param("username"))
-  var id string = OSLcastString(c.Param("id"))
-  var sessionId string = OSLcastString(OSLgetItem(OSLcastArray(c.Cookie("session_id")), 1))
-  var requestingUser string = ""
-  if OSLnotEqual(sessionId, "") && OSLcontains(sessions, sessionId) {
-    requestingUser = strings.ToLower(OSLcastString(OSLgetItem(sessions, sessionId)))
-  }
-  var allowed bool = OSLequal(strings.ToLower(owner), requestingUser)
-  if (allowed != true) {
-    var sharesObj map[string]any = OSLcastObject(readUserShares(owner))
-    var shares []any = OSLcastArray(OSLgetItem(sharesObj, "shares"))
-    for i := 1; i <= OSLlen(shares); i++ {
-      var share map[string]any = OSLcastObject(OSLgetItem(shares, i))
-      if OSLequal(OSLcastString(OSLgetItem(share, "imageId")), id) {
-        if OSLequal(OSLgetItem(share, "isPublic"), true) {
-          allowed = true
-          break
-        }
-        var sharedWith []any = OSLcastArray(OSLgetItem(share, "sharedWith"))
-        for j := 1; j <= OSLlen(sharedWith); j++ {
-          if OSLequal(strings.ToLower(OSLcastString(OSLgetItem(sharedWith, j))), requestingUser) {
-            allowed = true
-            break
-          }
-        }
-        if allowed {
-          break
-        }
-      }
-    }
-  }
-  if (allowed != true) {
-    if OSLequal(requestingUser, "") {
-      c.Redirect(302, "/auth")
-      return
-    }
-    c.HTML(403, "error.html",  map[string]any{
-      "Title": "Access Denied",
-      "Message": "You don't have access to this image.",
-    })
-    return
-  }
-  var path string = (((("db/" + strings.ToLower(owner)) + "/blob/") + id) + ".jpg")
-  if (fs.Exists(path) != true) || fs.IsDir(path) {
-    if OSLequal(requestingUser, "") {
-      c.Redirect(302, "/auth")
-      return
-    }
-    c.HTML(404, "error.html",  map[string]any{
-      "Title": "Not Found",
-      "Message": "Image not found.",
-    })
-    return
-  }
-  c.File(path)
-}
-
 func abortUnauthorized(c *gin.Context) {
   var path string = OSLcastString(OSLgetItem(OSLgetItem(OSLgetItem(c, "Request"), "URL"), "Path"))
   if strings.HasPrefix(path, "/api") {
-    c.JSON(401,  map[string]any{
+    c.JSON(401, map[string]any{
       "ok": false,
       "error": "not authenticated",
     })
@@ -2882,31 +2000,39 @@ func requireSession(c *gin.Context) {
     abortUnauthorized(c)
     return
   }
-  var username string = OSLcastString(OSLgetItem(sessions, sessionId))
-  if (OSLcontains(userData, strings.ToLower(username)) != true) {
-    if fs.Exists((("db/" + strings.ToLower(username)) + "/user.json")) {
-      var data string = OSLcastString(fs.ReadFile((("db/" + strings.ToLower(username)) + "/user.json")))
-      OSLsetItem(userData, strings.ToLower(username), JsonParse(data))
+  var userId string = OSLcastString(OSLgetItem(sessions, sessionId))
+  if (OSLcontains(userData, userId) != true) {
+    if fs.Exists((("db/" + userId) + "/user.json")) {
+      var data string = OSLcastString(fs.ReadFile((("db/" + userId) + "/user.json")))
+      OSLsetItem(userData, userId, JsonParse(data))
     }
+  }
+  c.Set("userId", userId)
+  var username string = ""
+  if OSLcontains(userIdToUsername, userId) {
+    username = OSLcastString(OSLgetItem(userIdToUsername, userId))
   }
   c.Set("username", username)
   c.Next()
 }
 
 func homePage(c *gin.Context) {
-  var username = OSLcastString(c.MustGet("username"))
-  var profileReq map[string]any = OSLcastObject(writeProfile(username))
-  if (OSLgetItem(profileReq, "ok") != true) {
-    c.String(401, OSLcastString(OSLgetItem(profileReq, "error")))
-    return
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var username string = OSLcastString(c.MustGet("username"))
+  if (OSLcontains(userData, userId) != true) {
+    var profileReq map[string]any = OSLcastObject(writeProfile(userId, username))
+    if (OSLgetItem(profileReq, "ok") != true) {
+      c.String(401, OSLcastString(OSLgetItem(profileReq, "error")))
+      return
+    }
   }
-  c.HTML(200, "index.html",  map[string]any{
+  c.HTML(200, "index.html", map[string]any{
     "Username": username,
-    "Subscription": OSLgetItem(OSLgetItem(userData, strings.ToLower(username)), "subscription"),
+    "Subscription": OSLgetItem(OSLgetItem(userData, userId), "subscription"),
   })
 }
 func authPage(c *gin.Context) {
-  c.HTML(200, "auth.html",  map[string]any{
+  c.HTML(200, "auth.html", map[string]any{
     "AuthKey": authKey,
   })
 }
@@ -2956,15 +2082,14 @@ func loadConfig() {
     downscaleWhen = OSLgetItem(config, "downscaleWhen").(map[string]any)
   }
 }
-func getAble(username string) map[string]any {
-  username = strings.ToLower(username)
-  var profile map[string]any = OSLcastObject(OSLgetItem(userData, username))
+func getAble(userId string) map[string]any {
+  var profile map[string]any = OSLcastObject(OSLgetItem(userData, userId))
   if OSLequal(profile, nil) {
-    if fs.Exists((("db/" + username) + "/user.json")) {
-      var data string = OSLcastString(fs.ReadFile((("db/" + username) + "/user.json")))
+    if fs.Exists((("db/" + userId) + "/user.json")) {
+      var data string = OSLcastString(fs.ReadFile((("db/" + userId) + "/user.json")))
       profile = JsonParse(data).(map[string]any)
     } else {
-      return  map[string]any{
+      return map[string]any{
         "canAccess": false,
         "maxUpload": "0",
       }
@@ -2972,14 +2097,14 @@ func getAble(username string) map[string]any {
   }
   var subscription string = strings.ToLower(OSLcastString(OSLgetItem(profile, "subscription")))
   var quota float64 = 0
-  var maybeQuota any = OSLgetItem(quotas, strings.ToLower(username))
+  var maybeQuota any = OSLgetItem(quotas, userId)
   if OSLnotEqual(maybeQuota, nil) {
     quota = OSLcastNumber(maybeQuota)
   } else if useSubscriptions {
     quota = OSLcastNumber(OSLgetItem(subscriptionSizes, subscription))
   }
-  var images []any = readUserImages(username)
-  return  map[string]any{
+  var images []any = readUserImages(userId)
+  return map[string]any{
     "canAccess": OSLcastNumber(quota) > OSLcastNumber(0),
     "storageQuota": quota,
     "hasImages": OSLcastNumber(OSLlen(images)) > OSLcastNumber(0),
@@ -2988,50 +2113,58 @@ func getAble(username string) map[string]any {
 func getProfile(username string) map[string]any {
   var resp_profile map[string]any = OSLcastObject(requests.Get(("https://api.rotur.dev/profile?include_posts=0&name=" + username)))
   if (OSLgetItem(resp_profile, "success") != true) {
-    return  map[string]any{
+    return map[string]any{
       "ok": false,
       "error": "failed to fetch profile",
     }
   }
   var profile map[string]any = OSLcastObject(JsonParse(OSLcastString(OSLgetItem(resp_profile, "body"))))
   if OSLnotEqual(OSLgetItem(profile, "error"), nil) {
-    return  map[string]any{
+    return map[string]any{
       "ok": false,
       "error": OSLgetItem(profile, "error"),
     }
   }
-  return  map[string]any{
+  return map[string]any{
     "ok": true,
     "profile": profile,
   }
 }
-func writeProfile(username string) map[string]any {
+func writeProfile(userId string, username string) map[string]any {
   var profileReq map[string]any = getProfile(username)
   if (OSLgetItem(profileReq, "ok") != true) {
     return profileReq
   }
-  OSLsetItem(userData, strings.ToLower(username), OSLgetItem(profileReq, "profile"))
-  fs.MkdirAll(("db/" + strings.ToLower(username)))
-  fs.WriteFile((("db/" + strings.ToLower(username)) + "/user.json"), OSLcastString(OSLgetItem(profileReq, "profile")))
+  OSLsetItem(userData, userId, OSLgetItem(profileReq, "profile"))
+  OSLsetItem(userIdToUsername, userId, username)
+  OSLsetItem(usernameToUserId, username, userId)
+  fs.MkdirAll(("db/" + userId))
+  fs.WriteFile((("db/" + userId) + "/user.json"), OSLcastString(OSLgetItem(profileReq, "profile")))
   return profileReq
 }
-func userDbPath(username string) string {
-  return (("db/" + strings.ToLower(username)) + "/images.json")
+func getUserIdFromUsername(username string) string {
+  if OSLcontains(usernameToUserId, username) {
+    return OSLcastString(OSLgetItem(usernameToUserId, username))
+  }
+  return ""
 }
-func ensureUserDb(username string) {
-  var dir string = ("db/" + strings.ToLower(username))
+func userDbPath(userId string) string {
+  return (("db/" + userId) + "/images.json")
+}
+func ensureUserDb(userId string) {
+  var dir string = ("db/" + userId)
   if (fs.Exists(dir) != true) {
     fs.MkdirAll(dir)
   }
-  var path string = userDbPath(username)
+  var path string = userDbPath(userId)
   if (fs.Exists(path) != true) {
     fs.WriteFile(path, "[]")
   }
-  ensureCacheDir(username)
+  ensureCacheDir(userId)
 }
-func readUserImages(username string) []any {
-  ensureUserDb(username)
-  var path string = userDbPath(username)
+func readUserImages(userId string) []any {
+  ensureUserDb(userId)
+  var path string = userDbPath(userId)
   var data string = OSLcastString(fs.ReadFile(path))
   if OSLequal(data, "") {
     return []any{}
@@ -3039,8 +2172,8 @@ func readUserImages(username string) []any {
   var arr []any = OSLcastArray(JsonParse(data))
   return arr
 }
-func enrichImagesWithSharing(username string, images []any) []any {
-  var sharesObj map[string]any = readUserShares(username)
+func enrichImagesWithSharing(userId string, images []any) []any {
+  var sharesObj map[string]any = readUserShares(userId)
   var shares []any = OSLcastArray(OSLgetItem(sharesObj, "shares"))
   for i := 1; i <= OSLlen(images); i++ {
     var img map[string]any = OSLcastObject(OSLgetItem(images, i))
@@ -3054,8 +2187,8 @@ func enrichImagesWithSharing(username string, images []any) []any {
   }
   return images
 }
-func writeUserImages(username string, arr []any) bool {
-  var path string = userDbPath(username)
+func writeUserImages(userId string, arr []any) bool {
+  var path string = userDbPath(userId)
   var out string = OSLcastString(arr)
   return fs.WriteFile(path, out)
 }
@@ -3088,25 +2221,25 @@ func removeImages(arr []any, ids []any) []any {
   }
   return out
 }
-func userAlbumsPath(username string) string {
-  return (("db/" + strings.ToLower(username)) + "/albums.json")
+func userAlbumsPath(userId string) string {
+  return (("db/" + userId) + "/albums.json")
 }
-func ensureUserAlbums(username string) {
-  var dir string = ("db/" + strings.ToLower(username))
+func ensureUserAlbums(userId string) {
+  var dir string = ("db/" + userId)
   if (fs.Exists(dir) != true) {
     fs.MkdirAll(dir)
   }
-  var path string = userAlbumsPath(username)
+  var path string = userAlbumsPath(userId)
   if (fs.Exists(path) != true) {
     fs.WriteFile(path, "{ \"albums\": [], \"items\": {} }")
   }
 }
-func readUserAlbums(username string) map[string]any {
-  ensureUserAlbums(username)
-  var path string = userAlbumsPath(username)
+func readUserAlbums(userId string) map[string]any {
+  ensureUserAlbums(userId)
+  var path string = userAlbumsPath(userId)
   var data string = OSLcastString(fs.ReadFile(path))
   if OSLequal(data, "") {
-    return  map[string]any{
+    return map[string]any{
       "albums": []any{},
       "items": map[string]any{},
     }
@@ -3120,13 +2253,13 @@ func readUserAlbums(username string) map[string]any {
   }
   return obj
 }
-func writeUserAlbums(username string, albums map[string]any) bool {
-  var path string = userAlbumsPath(username)
+func writeUserAlbums(userId string, albums map[string]any) bool {
+  var path string = userAlbumsPath(userId)
   var out string = OSLcastString(albums)
   return fs.WriteFile(path, out)
 }
-func addAlbum(username string, name string) map[string]any {
-  var albums map[string]any = readUserAlbums(username)
+func addAlbum(userId string, name string) map[string]any {
+  var albums map[string]any = readUserAlbums(userId)
   var list []any = OSLcastArray(OSLgetItem(albums, "albums"))
   var exists bool = false
   for i := 1; i <= OSLlen(list); i++ {
@@ -3142,11 +2275,11 @@ func addAlbum(username string, name string) map[string]any {
     var items map[string]any = OSLcastObject(OSLgetItem(albums, "items"))
     OSLsetItem(items, name, []any{})
   }
-  writeUserAlbums(username, albums)
+  writeUserAlbums(userId, albums)
   return albums
 }
-func removeAlbumDef(username string, name string) map[string]any {
-  var albums map[string]any = readUserAlbums(username)
+func removeAlbumDef(userId string, name string) map[string]any {
+  var albums map[string]any = readUserAlbums(userId)
   var list []any = OSLcastArray(OSLgetItem(albums, "albums"))
   var out []any = []any{}
   for i := 1; i <= OSLlen(list); i++ {
@@ -3157,11 +2290,11 @@ func removeAlbumDef(username string, name string) map[string]any {
   }
   OSLsetItem(albums, "albums", out)
   OSLdelete(OSLgetItem(albums, "items"), name)
-  writeUserAlbums(username, albums)
+  writeUserAlbums(userId, albums)
   return albums
 }
-func addImageToAlbum(username string, name string, id string) map[string]any {
-  var albums map[string]any = readUserAlbums(username)
+func addImageToAlbum(userId string, name string, id string) map[string]any {
+  var albums map[string]any = readUserAlbums(userId)
   var items map[string]any = OSLcastObject(OSLgetItem(albums, "items"))
   if OSLequal(OSLgetItem(OSLgetItem(albums, "items"), name), nil) {
     OSLsetItem(items, name, []any{})
@@ -3176,12 +2309,12 @@ func addImageToAlbum(username string, name string, id string) map[string]any {
   if (exists != true) {
     OSLappend(&(ids), id)
     OSLsetItem(items, name, ids)
-    writeUserAlbums(username, albums)
+    writeUserAlbums(userId, albums)
   }
   return albums
 }
-func removeImageFromAlbum(username string, name string, id string) map[string]any {
-  var albums map[string]any = readUserAlbums(username)
+func removeImageFromAlbum(userId string, name string, id string) map[string]any {
+  var albums map[string]any = readUserAlbums(userId)
   var ids []any = OSLcastArray(OSLgetItem(OSLgetItem(albums, "items"), name))
   var out []any = []any{}
   for i := 1; i <= OSLlen(ids); i++ {
@@ -3191,31 +2324,31 @@ func removeImageFromAlbum(username string, name string, id string) map[string]an
   }
   var items map[string]any = OSLcastObject(OSLgetItem(albums, "items"))
   OSLsetItem(items, name, out)
-  writeUserAlbums(username, albums)
+  writeUserAlbums(userId, albums)
   return albums
 }
-func userBinPath(username string) string {
-  return (("db/" + strings.ToLower(username)) + "/bin.json")
+func userBinPath(userId string) string {
+  return (("db/" + userId) + "/bin.json")
 }
-func ensureUserBin(username string) {
-  var dir string = ("db/" + strings.ToLower(username))
+func ensureUserBin(userId string) {
+  var dir string = ("db/" + userId)
   if (fs.Exists(dir) != true) {
     fs.MkdirAll(dir)
   }
-  var path string = userBinPath(username)
+  var path string = userBinPath(userId)
   if (fs.Exists(path) != true) {
     fs.WriteFile(path, "[]")
   }
 }
-func ensureCacheDir(username string) {
-  var dir string = (("db/" + strings.ToLower(username)) + "/cache")
+func ensureCacheDir(userId string) {
+  var dir string = (("db/" + userId) + "/cache")
   if (fs.Exists(dir) != true) {
     fs.MkdirAll(dir)
   }
 }
-func readUserBin(username string) []any {
-  ensureUserBin(username)
-  var path string = userBinPath(username)
+func readUserBin(userId string) []any {
+  ensureUserBin(userId)
+  var path string = userBinPath(userId)
   var data string = OSLcastString(fs.ReadFile(path))
   if OSLequal(data, "") {
     return []any{}
@@ -3223,15 +2356,15 @@ func readUserBin(username string) []any {
   var arr []any = OSLcastArray(JsonParse(data))
   return arr
 }
-func writeUserBin(username string, arr []any) bool {
-  var path string = userBinPath(username)
+func writeUserBin(userId string, arr []any) bool {
+  var path string = userBinPath(userId)
   var out string = OSLcastString(arr)
   return fs.WriteFile(path, out)
 }
-func calculateStorageStats(username string) map[string]any {
-  var path string = (("db/" + strings.ToLower(username)) + "/blob")
+func calculateStorageStats(userId string) map[string]any {
+  var path string = (("db/" + userId) + "/blob")
   if (fs.Exists(path) != true) {
-    return  map[string]any{
+    return map[string]any{
       "totalBytes": 0,
       "imageCount": 0,
       "largestImages": []any{},
@@ -3258,12 +2391,12 @@ func calculateStorageStats(username string) map[string]any {
         OSLsetItem(sizeGroups, sizeStr, []any{})
       }
       var sg []any = OSLcastArray(OSLgetItem(sizeGroups, sizeStr))
-      OSLappend(&(sg),  map[string]any{
+      OSLappend(&(sg), map[string]any{
         "id": id,
         "path": fpath,
       })
       OSLsetItem(sizeGroups, sizeStr, sg)
-      OSLappend(&(entries),  map[string]any{
+      OSLappend(&(entries), map[string]any{
         "id": id,
         "bytes": size,
         "path": fpath,
@@ -3294,7 +2427,7 @@ func calculateStorageStats(username string) map[string]any {
     var hKey string = OSLcastString(OSLgetItem(hashKeys, i))
     var group []any = OSLcastArray(OSLgetItem(hashGroups, hKey))
     if OSLcastNumber(OSLlen(group)) > OSLcastNumber(1) {
-      OSLappend(&(duplicateGroups),  map[string]any{
+      OSLappend(&(duplicateGroups), map[string]any{
         "hash": hKey,
         "ids": group,
       })
@@ -3316,12 +2449,12 @@ func calculateStorageStats(username string) map[string]any {
     limit = n
   }
   for i := 1; i <= OSLround(limit); i++ {
-    OSLappend(&(largest),  map[string]any{
+    OSLappend(&(largest), map[string]any{
       "id": OSLgetItem(OSLgetItem(entries, i), "id"),
       "bytes": OSLgetItem(OSLgetItem(entries, i), "bytes"),
     })
   }
-  var binPath string = (("db/" + strings.ToLower(username)) + "/bin")
+  var binPath string = (("db/" + userId) + "/bin")
   var binBytes float64 = 0
   if fs.Exists(binPath) {
     var binFiles []any = OSLcastArray(fs.ReadDir(binPath))
@@ -3338,7 +2471,7 @@ func calculateStorageStats(username string) map[string]any {
   for i := 1; i <= OSLlen(entries); i++ {
     OSLsetItem(fileSizes, OSLcastString(OSLgetItem(OSLgetItem(entries, i), "id")), OSLgetItem(OSLgetItem(entries, i), "bytes"))
   }
-  return  map[string]any{
+  return map[string]any{
     "totalBytes": totalBytes,
     "imageCount": imageCount,
     "largestImages": largest,
@@ -3347,25 +2480,25 @@ func calculateStorageStats(username string) map[string]any {
     "fileSizes": fileSizes,
   }
 }
-func userSharesPath(username string) string {
-  return (("db/" + strings.ToLower(username)) + "/shares.json")
+func userSharesPath(userId string) string {
+  return (("db/" + userId) + "/shares.json")
 }
-func ensureUserShares(username string) {
-  var dir string = ("db/" + strings.ToLower(username))
+func ensureUserShares(userId string) {
+  var dir string = ("db/" + userId)
   if (fs.Exists(dir) != true) {
     fs.MkdirAll(dir)
   }
-  var path string = userSharesPath(username)
+  var path string = userSharesPath(userId)
   if (fs.Exists(path) != true) {
     fs.WriteFile(path, "{ \"shares\": [] }")
   }
 }
-func readUserShares(username string) map[string]any {
-  ensureUserShares(username)
-  var path string = userSharesPath(username)
+func readUserShares(userId string) map[string]any {
+  ensureUserShares(userId)
+  var path string = userSharesPath(userId)
   var data string = OSLcastString(fs.ReadFile(path))
   if OSLequal(data, "") {
-    return  map[string]any{
+    return map[string]any{
       "shares": []any{},
     }
   }
@@ -3375,11 +2508,11 @@ func readUserShares(username string) map[string]any {
   }
   return obj
 }
-func writeUserShares(username string, sharesObj map[string]any) bool {
-  var path string = userSharesPath(username)
+func writeUserShares(userId string, sharesObj map[string]any) bool {
+  var path string = userSharesPath(userId)
   return fs.WriteFile(path, OSLcastString(sharesObj))
 }
-func addShare(owner string, imageId string, targetUsername string) map[string]any {
+func addShare(owner string, imageId string, targetUserId string) map[string]any {
   var sharesObj map[string]any = readUserShares(owner)
   var shares []any = OSLcastArray(OSLgetItem(sharesObj, "shares"))
   var found bool = false
@@ -3389,22 +2522,22 @@ func addShare(owner string, imageId string, targetUsername string) map[string]an
       var sharedWith []any = OSLcastArray(OSLgetItem(share, "sharedWith"))
       var exists bool = false
       for j := 1; j <= OSLlen(sharedWith); j++ {
-        if OSLequal(strings.ToLower(OSLcastString(OSLgetItem(sharedWith, j))), strings.ToLower(targetUsername)) {
+        if OSLequal(OSLcastString(OSLgetItem(sharedWith, j)), targetUserId) {
           exists = true
         }
       }
       if (exists != true) {
-        OSLappend(&(sharedWith), strings.ToLower(targetUsername))
+        OSLappend(&(sharedWith), targetUserId)
         OSLsetItem(share, "sharedWith", sharedWith)
       }
       found = true
     }
   }
   if (found != true) {
-    OSLappend(&(shares),  map[string]any{
+    OSLappend(&(shares), map[string]any{
       "imageId": imageId,
       "sharedWith": []any{
-        strings.ToLower(targetUsername),
+        targetUserId,
       },
     })
   }
@@ -3412,7 +2545,7 @@ func addShare(owner string, imageId string, targetUsername string) map[string]an
   writeUserShares(owner, sharesObj)
   return sharesObj
 }
-func removeShare(owner string, imageId string, targetUsername string) map[string]any {
+func removeShare(owner string, imageId string, targetUserId string) map[string]any {
   var sharesObj map[string]any = readUserShares(owner)
   var shares []any = OSLcastArray(OSLgetItem(sharesObj, "shares"))
   var newShares []any = []any{}
@@ -3422,7 +2555,7 @@ func removeShare(owner string, imageId string, targetUsername string) map[string
       var sharedWith []any = OSLcastArray(OSLgetItem(share, "sharedWith"))
       var newSharedWith []any = []any{}
       for j := 1; j <= OSLlen(sharedWith); j++ {
-        if OSLnotEqual(strings.ToLower(OSLcastString(OSLgetItem(sharedWith, j))), strings.ToLower(targetUsername)) {
+        if OSLnotEqual(OSLcastString(OSLgetItem(sharedWith, j)), targetUserId) {
           OSLappend(&(newSharedWith), OSLgetItem(sharedWith, j))
         }
       }
@@ -3450,7 +2583,7 @@ func setPublicShare(owner string, imageId string, isPublic bool) map[string]any 
     }
   }
   if (found != true) && OSLequal(isPublic, true) {
-    OSLappend(&(shares),  map[string]any{
+    OSLappend(&(shares), map[string]any{
       "imageId": imageId,
       "sharedWith": []any{},
       "isPublic": true,
@@ -3460,7 +2593,7 @@ func setPublicShare(owner string, imageId string, isPublic bool) map[string]any 
   writeUserShares(owner, sharesObj)
   return sharesObj
 }
-func getSharedWithMe(username string) []any {
+func getSharedWithMe(userId string) []any {
   var results []any = []any{}
   var dbPath string = "db"
   if (fs.Exists(dbPath) != true) {
@@ -3480,8 +2613,8 @@ func getSharedWithMe(username string) []any {
             var share map[string]any = OSLcastObject(OSLgetItem(shares, j))
             var sharedWith []any = OSLcastArray(OSLgetItem(share, "sharedWith"))
             for k := 1; k <= OSLlen(sharedWith); k++ {
-              if OSLequal(strings.ToLower(OSLcastString(OSLgetItem(sharedWith, k))), strings.ToLower(username)) {
-                OSLappend(&(results),  map[string]any{
+              if OSLequal(OSLcastString(OSLgetItem(sharedWith, k)), userId) {
+                OSLappend(&(results), map[string]any{
                   "owner": ownerDir,
                   "imageId": OSLgetItem(share, "imageId"),
                 })
@@ -3494,12 +2627,12 @@ func getSharedWithMe(username string) []any {
   }
   return results
 }
-func getCachePath(username string, id string) string {
-  return (((("db/" + strings.ToLower(username)) + "/cache/") + id) + "_preview.jpg")
+func getCachePath(userId string, id string) string {
+  return (((("db/" + userId) + "/cache/") + id) + "_preview.jpg")
 }
 func servePreview(c *gin.Context, path string, id string, username string) bool {
   if (fs.Exists(path) != true) || fs.IsDir(path) {
-    c.JSON(404,  map[string]any{
+    c.JSON(404, map[string]any{
       "ok": false,
       "error": "not found",
     })
@@ -3525,14 +2658,14 @@ func servePreview(c *gin.Context, path string, id string, username string) bool 
   var fileInfo map[string]any = OSLcastObject(fs.GetStat(path))
   var fileSize float64 = OSLcastNumber(OSLgetItem(fileInfo, "size"))
   if OSLequal(fileSize, 0) {
-    c.JSON(404,  map[string]any{
+    c.JSON(404, map[string]any{
       "ok": false,
       "error": "not found",
     })
     return false
   }
   if OSLcastNumber(fileSize) > OSLcastNumber(1e+07) {
-    c.JSON(413,  map[string]any{
+    c.JSON(413, map[string]any{
       "ok": false,
       "error": "file too large",
     })
@@ -3540,7 +2673,7 @@ func servePreview(c *gin.Context, path string, id string, username string) bool 
   }
   var im = img.Open(path)
   if OSLequal(im, nil) {
-    c.JSON(400,  map[string]any{
+    c.JSON(400, map[string]any{
       "ok": false,
       "error": "invalid image",
     })
@@ -3561,7 +2694,7 @@ func servePreview(c *gin.Context, path string, id string, username string) bool 
   var rh int = OSLround(OSLmultiply(h, ratio))
   var resized = img.ResizeFast(im, rw, rh)
   if OSLequal(resized, nil) {
-    c.JSON(500,  map[string]any{
+    c.JSON(500, map[string]any{
       "ok": false,
       "error": "resize failed",
     })
@@ -3575,7 +2708,7 @@ func servePreview(c *gin.Context, path string, id string, username string) bool 
   } else {
     var out []byte = img.EncodeJPEGBytes(resized, 80)
     if OSLequal(OSLlen(out), 0) {
-      c.JSON(500,  map[string]any{
+      c.JSON(500, map[string]any{
         "ok": false,
         "error": "encode failed",
       })
@@ -3585,6 +2718,1149 @@ func servePreview(c *gin.Context, path string, id string, username string) bool 
     c.Data(200, "image/jpeg", out)
   }
   return true
+}
+
+func handleAuth(c *gin.Context) {
+  var token string = OSLcastString(c.Query("v"))
+  if OSLequal(token, "") {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "missing token",
+    })
+    return
+  }
+  var resp map[string]any = OSLcastObject(requests.Get(("https://api.rotur.dev/validate?key=rotur-photos&v=" + token)))
+  if (OSLgetItem(resp, "success") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "failed to validate token",
+    })
+    return
+  }
+  var json map[string]any = OSLcastObject(JsonParse(OSLcastString(OSLgetItem(resp, "body"))))
+  if OSLnotEqual(OSLgetItem(json, "error"), nil) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": OSLgetItem(json, "error"),
+    })
+    return
+  }
+  if (OSLgetItem(json, "valid") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "invalidate token",
+    })
+    return
+  }
+  var sessionId string = randomString(32)
+  var userId string = OSLcastString(OSLgetItem(json, "id"))
+  var username string = OSLcastString(OSLgetItem(json, "username"))
+  OSLsetItem(sessions, sessionId, userId)
+  var profileReq map[string]any = writeProfile(userId, username)
+  if (OSLgetItem(profileReq, "ok") != true) {
+    c.JSON(401, OSLgetItem(profileReq, "error"))
+    return
+  }
+  fs.WriteFile("db/sessions.json", JsonFormat(sessions))
+  c.SetCookie("session_id", sessionId, 86400, "/", "", false, true)
+  c.JSON(200, map[string]any{
+    "ok": true,
+    "token": token,
+  })
+}
+func handleLogout(c *gin.Context) {
+  var sessionId string = OSLcastString(OSLgetItem(OSLcastArray(c.Cookie("session_id")), 1))
+  if OSLnotEqual(sessionId, "") && OSLcontains(sessions, sessionId) {
+    OSLdelete(sessions, sessionId)
+    fs.WriteFile("db/sessions.json", JsonFormat(sessions))
+  }
+  c.SetCookie("session_id", "", -1, "/", "", false, true)
+  c.JSON(200, map[string]any{
+    "ok": true,
+  })
+}
+func handleAble(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  c.JSON(200, able)
+}
+func handleStorage(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var stats map[string]any = calculateStorageStats(userId)
+  OSLsetItem(stats, "quota", OSLgetItem(able, "storageQuota"))
+  c.JSON(200, stats)
+}
+func handleAllImages(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) && (OSLgetItem(able, "hasImages") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var images []any = readUserImages(userId)
+  images = enrichImagesWithSharing(userId, images)
+  c.JSON(200, images)
+}
+func handleRecentImages(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var arr []any = readUserImages(userId)
+  var n int = OSLlen(arr)
+  var nowMs float64 = OSLcastNumber(time.Now().UnixMilli())
+  var ninety float64 = OSLcastNumber(OSLmultiply(OSLmultiply(OSLmultiply(OSLmultiply(90, 24), 60), 60), 1000))
+  var out []any = []any{}
+  for i := 1; i <= OSLround(n); i++ {
+    var it map[string]any = OSLcastObject(OSLgetItem(arr, i))
+    var ts float64 = OSLcastNumber(OSLgetItem(it, "timestamp"))
+    if OSLcastNumber(OSLsub(nowMs, ts)) <= OSLcastNumber(ninety) {
+      OSLappend(&(out), it)
+    }
+  }
+  out = enrichImagesWithSharing(userId, out)
+  c.JSON(200, out)
+}
+func handleYearImages(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var year int = OSLcastInt(c.Param("year"))
+  var arr []any = readUserImages(userId)
+  var n int = OSLlen(arr)
+  var out []any = []any{}
+  for i := 1; i <= OSLround(n); i++ {
+    var it map[string]any = OSLcastObject(OSLgetItem(arr, i))
+    var ts int = OSLcastInt(OSLgetItem(it, "timestamp"))
+    var t = time.UnixMilli(int64(ts))
+    if OSLequal(t.Year(), year) {
+      OSLappend(&(out), it)
+    }
+  }
+  out = enrichImagesWithSharing(userId, out)
+  c.JSON(200, out)
+}
+func handleMonthImages(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var year int = OSLcastInt(c.Param("year"))
+  var month int = OSLcastInt(c.Param("month"))
+  var arr []any = readUserImages(userId)
+  var n int = OSLlen(arr)
+  var out []any = []any{}
+  for i := 1; i <= OSLround(n); i++ {
+    var it map[string]any = OSLcastObject(OSLgetItem(arr, i))
+    var ts int = OSLcastInt(OSLgetItem(it, "timestamp"))
+    var t = time.UnixMilli(int64(ts))
+    var tMonth int = int(0)
+    tMonth = int(t.Month())
+    if OSLequal(t.Year(), year) && OSLequal(tMonth, month) {
+      OSLappend(&(out), it)
+    }
+  }
+  out = enrichImagesWithSharing(userId, out)
+  c.JSON(200, out)
+}
+func handleUpload(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var base string = (("db/" + userId) + "/blob")
+  if (fs.Exists(base) != true) {
+    fs.MkdirAll(base)
+  }
+  var tmpPath string = ((base + "/tmp-") + randomString(16))
+  var body []byte = OSLgetItem(OSLcastArray(c.GetRawData()), 1).([]byte)
+  if OSLequal(OSLlen(body), 0) {
+    c.JSON(400, map[string]any{
+      "ok": false,
+      "error": "empty body",
+    })
+    return
+  }
+  var stats map[string]any = calculateStorageStats(userId)
+  if OSLcastNumber(((OSLcastNumber(OSLgetItem(stats, "totalBytes")) + OSLcastNumber(OSLgetItem(stats, "binBytes"))) + float64(OSLlen(body)))) > OSLcastNumber(OSLcastNumber(OSLgetItem(able, "storageQuota"))) {
+    c.JSON(403, map[string]any{
+      "ok": false,
+      "error": "storage quota exceeded",
+    })
+    return
+  }
+  if (fs.WriteFile(tmpPath, body) != true) {
+    c.JSON(500, map[string]any{
+      "ok": false,
+      "error": "failed to write upload",
+    })
+    return
+  }
+  var im = img.Open(tmpPath)
+  if OSLequal(im, nil) {
+    fs.Remove(tmpPath)
+    c.JSON(400, map[string]any{
+      "ok": false,
+      "error": "invalid image",
+    })
+    return
+  }
+  var size map[string]any = OSLcastObject(im.Size())
+  var w int = OSLround(OSLgetItem(size, "w"))
+  var h int = OSLround(OSLgetItem(size, "h"))
+  if OSLcastNumber(w) > OSLcastNumber(OSLgetItem(downscaleWhen, "width")) || OSLcastNumber(h) > OSLcastNumber(OSLgetItem(downscaleWhen, "height")) {
+    var ratio float64 = OSLcastNumber(OSLmin(OSLdivide(OSLcastInt(OSLgetItem(downscaleWhen, "width")), w), OSLdivide(OSLcastInt(OSLgetItem(downscaleWhen, "height")), h)))
+    w = OSLround(OSLmultiply(w, ratio))
+    h = OSLround(OSLmultiply(h, ratio))
+    var resized = img.Resize(im, w, h)
+    im.Close()
+    if OSLequal(resized, nil) {
+      fs.Remove(tmpPath)
+      c.JSON(500, map[string]any{
+        "ok": false,
+        "error": "resize failed",
+      })
+      return
+    }
+    im = resized
+  }
+  var id string = randomString(24)
+  var outPath string = (((base + "/") + id) + ".jpg")
+  if (img.SaveJPEG(im, outPath, 90) != true) {
+    im.Close()
+    fs.Remove(tmpPath)
+    c.JSON(500, map[string]any{
+      "ok": false,
+      "error": "save failed",
+    })
+    return
+  }
+  im.Close()
+  var tsms float64 = OSLcastNumber(time.Now().UnixMilli())
+  var x *exif.Exif = nil
+  f, err := os.Open(tmpPath)
+  if OSLequal(err, nil) {
+    defer f.Close()
+    x, err = exif.Decode(f)
+    if OSLequal(err, nil) {
+      t, err := x.DateTime()
+      if OSLequal(err, nil) && (t.IsZero() != true) {
+        tsms = OSLcastNumber(t.UnixMilli())
+      }
+    }
+  }
+  var entry map[string]any = map[string]any{
+    "id": id,
+    "width": w,
+    "height": h,
+    "timestamp": tsms,
+    "make": "",
+    "model": "",
+    "exposure_time": "",
+    "f_number": "",
+  }
+  if OSLnotEqual(x, nil) {
+    if tag, err := x.Get(exif.Make); err == nil { entry["make"], _ = tag.StringVal() }
+    if tag, err := x.Get(exif.Model); err == nil { entry["model"], _ = tag.StringVal() }
+    if tag, err := x.Get(exif.ExposureTime); err == nil { entry["exposure_time"], _ = tag.StringVal() }
+    if tag, err := x.Get(exif.FNumber); err == nil { entry["f_number"], _ = tag.StringVal() }
+  }
+  fs.Remove(tmpPath)
+  var images []any = readUserImages(userId)
+  OSLappend(&(images), entry)
+  writeUserImages(userId, images)
+  c.JSON(200, map[string]any{
+    "ok": true,
+    "id": id,
+  })
+}
+func handleId(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var id string = OSLcastString(c.Param("id"))
+  var json bool = false
+  if strings.HasSuffix(id, ".json") {
+    id = OSLtrim(id, 1, -6)
+    json = true
+  }
+  if json {
+    var it map[string]any = findImage(readUserImages(userId), id)
+    if OSLequal(OSLgetItem(it, "id"), nil) {
+      c.JSON(404, map[string]any{
+        "ok": false,
+        "error": "not found",
+      })
+      return
+    }
+    c.JSON(200, it)
+    return
+  }
+  var path string = (((("db/" + userId) + "/blob/") + id) + ".jpg")
+  if (fs.Exists(path) != true) || fs.IsDir(path) {
+    c.JSON(404, map[string]any{
+      "ok": false,
+      "error": "not found",
+    })
+    return
+  }
+  var fileInfo map[string]any = OSLcastObject(fs.GetStat(path))
+  var etag string = (("\"" + OSLcastString(OSLgetItem(fileInfo, "modTime"))) + "\"")
+  var ifNoneMatch string = OSLcastString(c.GetHeader("If-None-Match"))
+  if OSLequal(ifNoneMatch, etag) {
+    c.Status(304)
+    return
+  }
+  c.Header("ETag", etag)
+  c.Header("Cache-Control", "private, must-revalidate")
+  c.File(path)
+}
+func handleImageRotate(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var id string = OSLcastString(c.Param("id"))
+  var body map[string]any = OSLcastObject(JsonParse(OSLcastString(OSLgetItem(OSLgetItem(c, "Request"), "Body"))))
+  var angle float64 = OSLcastNumber(OSLgetItem(body, "angle"))
+  var path string = (((("db/" + userId) + "/blob/") + id) + ".jpg")
+  if (fs.Exists(path) != true) || fs.IsDir(path) {
+    c.JSON(404, map[string]any{
+      "ok": false,
+      "error": "not found",
+    })
+    return
+  }
+  var imgFile = img.Open(path)
+  if OSLequal(imgFile, nil) {
+    c.JSON(400, map[string]any{
+      "ok": false,
+      "error": "invalid image",
+    })
+    return
+  }
+  defer imgFile.Close()
+  var rotated = img.Rotate(imgFile, angle)
+  if OSLequal(rotated, nil) {
+    c.JSON(500, map[string]any{
+      "ok": false,
+      "error": "failed to rotate",
+    })
+    return
+  }
+  defer rotated.Close()
+  var wrote bool = bool(img.SaveJPEG(rotated, path, 90))
+  if (wrote != true) {
+    c.JSON(500, map[string]any{
+      "ok": false,
+      "error": "failed to save",
+    })
+    return
+  }
+  var arr []any = readUserImages(userId)
+  var it map[string]any = findImage(arr, id)
+  if OSLnotEqual(OSLgetItem(it, "id"), nil) {
+    if OSLequal(angle, 90) || OSLequal(angle, 270) {
+      var oldW float64 = OSLcastNumber(OSLgetItem(it, "width"))
+      OSLsetItem(it, "width", OSLgetItem(it, "height"))
+      OSLsetItem(it, "height", oldW)
+      writeUserImages(userId, arr)
+    }
+  }
+  c.JSON(200, map[string]any{
+    "ok": true,
+  })
+}
+func handleSearch(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var q string = strings.ToLower(c.Query("q"))
+  var arr []any = readUserImages(userId)
+  if OSLequal(q, "") {
+    c.JSON(200, arr)
+    return
+  }
+  var months []any = []any{
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+  }
+  var albums map[string]any = readUserAlbums(userId)
+  var out []any = []any{}
+  var n int = OSLlen(arr)
+  for i := 1; i <= OSLround(n); i++ {
+    var it map[string]any = OSLcastObject(OSLgetItem(arr, i))
+    var match bool = false
+    var ts float64 = OSLcastNumber(OSLgetItem(it, "timestamp"))
+    if OSLcastNumber(ts) > OSLcastNumber(0) {
+      var t = time.UnixMilli(int64(ts))
+      var year int = OSLcastInt(t.Year())
+      var month int = OSLround(t.Month())
+      if OSLcontains(q, OSLcastString(year)) {
+        match = true
+      }
+      if OSLcastNumber(month) > OSLcastNumber(0) && OSLcastNumber(month) <= OSLcastNumber(12) {
+        var monthName string = OSLcastString(OSLgetItem(months, month))
+        if OSLcontains(q, monthName) {
+          match = true
+        }
+      }
+    }
+    var make string = strings.ToLower(OSLcastString(OSLgetItem(it, "make")))
+    var model string = strings.ToLower(OSLcastString(OSLgetItem(it, "model")))
+    if OSLnotEqual(make, "") && OSLcontains(q, make) {
+      match = true
+    }
+    if OSLnotEqual(model, "") && OSLcontains(q, model) {
+      match = true
+    }
+    var items map[string]any = OSLcastObject(OSLgetItem(albums, "items"))
+    for j := 1; j <= OSLlen(OSLgetItem(albums, "albums")); j++ {
+      var albumName string = OSLcastString(OSLgetItem(OSLgetItem(albums, "albums"), j))
+      if OSLcontains(strings.ToLower(albumName), q) {
+        var albumIds []any = OSLcastArray(OSLgetItem(items, albumName))
+        for k := 1; k <= OSLlen(albumIds); k++ {
+          if OSLequal(OSLcastString(OSLgetItem(albumIds, k)), OSLcastString(OSLgetItem(it, "id"))) {
+            match = true
+          }
+        }
+      }
+    }
+    if match {
+      OSLappend(&(out), it)
+    }
+  }
+  c.JSON(200, out)
+}
+func handleShareMine(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var sharesObj map[string]any = readUserShares(userId)
+  var shares []any = OSLcastArray(OSLgetItem(sharesObj, "shares"))
+  var images []any = readUserImages(userId)
+  var out []any = []any{}
+  for i := 1; i <= OSLlen(shares); i++ {
+    var share map[string]any = OSLcastObject(OSLgetItem(shares, i))
+    var imageId string = OSLcastString(OSLgetItem(share, "imageId"))
+    var img map[string]any = findImage(images, imageId)
+    if OSLnotEqual(OSLgetItem(img, "id"), nil) {
+      OSLsetItem(img, "sharedWith", OSLgetItem(share, "sharedWith"))
+      OSLappend(&(out), img)
+    }
+  }
+  c.JSON(200, out)
+}
+func handleShareOthers(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var sharedWithMe []any = getSharedWithMe(userId)
+  var results []any = []any{}
+  for i := 1; i <= OSLlen(sharedWithMe); i++ {
+    var item map[string]any = OSLcastObject(OSLgetItem(sharedWithMe, i))
+    var owner string = OSLcastString(OSLgetItem(item, "owner"))
+    var imageId string = OSLcastString(OSLgetItem(item, "imageId"))
+    var ownerImages []any = readUserImages(owner)
+    var img map[string]any = findImage(ownerImages, imageId)
+    if OSLnotEqual(OSLgetItem(img, "id"), nil) {
+      OSLsetItem(img, "owner", owner)
+      OSLappend(&(results), img)
+    }
+  }
+  c.JSON(200, results)
+}
+func handleSharePatch(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var imageId string = OSLcastString(c.Param("id"))
+  var body map[string]any = OSLcastObject(JsonParse(OSLcastString(OSLgetItem(OSLgetItem(c, "Request"), "Body"))))
+  var add []any = OSLcastArray(OSLgetItem(body, "add"))
+  var remove []any = OSLcastArray(OSLgetItem(body, "remove"))
+  if OSLequal(add, nil) {
+    add = []any{}
+  }
+  if OSLequal(remove, nil) {
+    remove = []any{}
+  }
+  for i := 1; i <= OSLlen(add); i++ {
+    var targetUsername string = OSLcastString(OSLgetItem(add, i))
+    var targetUserId string = getUserIdFromUsername(targetUsername)
+    if OSLnotEqual(targetUserId, "") {
+      addShare(userId, imageId, targetUserId)
+    }
+  }
+  for i := 1; i <= OSLlen(remove); i++ {
+    var targetUsername string = OSLcastString(OSLgetItem(remove, i))
+    var targetUserId string = getUserIdFromUsername(targetUsername)
+    if OSLnotEqual(targetUserId, "") {
+      removeShare(userId, imageId, targetUserId)
+    }
+  }
+  if OSLnotEqual(OSLgetItem(body, "isPublic"), nil) {
+    setPublicShare(userId, imageId, OSLcastBool(OSLgetItem(body, "isPublic")))
+  }
+  c.JSON(200, map[string]any{
+    "ok": true,
+  })
+}
+func handleShareCreate(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var body map[string]any = OSLcastObject(JsonParse(OSLcastString(OSLgetItem(OSLgetItem(c, "Request"), "Body"))))
+  var imageId string = OSLcastString(OSLgetItem(body, "imageId"))
+  var targetUser string = OSLcastString(OSLgetItem(body, "username"))
+  if OSLequal(imageId, "") || OSLequal(targetUser, "") {
+    c.JSON(400, map[string]any{
+      "ok": false,
+      "error": "missing imageId or username",
+    })
+    return
+  }
+  var images []any = readUserImages(userId)
+  var img map[string]any = findImage(images, imageId)
+  if OSLequal(OSLgetItem(img, "id"), nil) {
+    c.JSON(404, map[string]any{
+      "ok": false,
+      "error": "image not found",
+    })
+    return
+  }
+  var targetUserId string = getUserIdFromUsername(targetUser)
+  if OSLequal(targetUserId, "") {
+    c.JSON(400, map[string]any{
+      "ok": false,
+      "error": "user not found",
+    })
+    return
+  }
+  addShare(userId, imageId, targetUserId)
+  c.JSON(200, map[string]any{
+    "ok": true,
+  })
+}
+func handleSharedImage(c *gin.Context) {
+  var ownerUsername string = OSLcastString(c.Param("owner"))
+  var id string = OSLcastString(c.Param("id"))
+  var requestingUserId string = ""
+  var sessionId string = OSLcastString(OSLgetItem(OSLcastArray(c.Cookie("session_id")), 1))
+  if OSLnotEqual(sessionId, "") && OSLcontains(sessions, sessionId) {
+    requestingUserId = OSLcastString(OSLgetItem(sessions, sessionId))
+  }
+  var ownerId string = getUserIdFromUsername(ownerUsername)
+  if OSLequal(ownerId, "") {
+    c.JSON(404, map[string]any{
+      "ok": false,
+      "error": "owner not found",
+    })
+    return
+  }
+  var sharesObj map[string]any = readUserShares(ownerId)
+  var shares []any = OSLcastArray(OSLgetItem(sharesObj, "shares"))
+  var allowed bool = false
+  if OSLequal(requestingUserId, ownerId) {
+    allowed = true
+  }
+  for i := 1; i <= OSLlen(shares); i++ {
+    var share map[string]any = OSLcastObject(OSLgetItem(shares, i))
+    if OSLequal(OSLcastString(OSLgetItem(share, "imageId")), id) {
+      var sharedWith []any = OSLcastArray(OSLgetItem(share, "sharedWith"))
+      for j := 1; j <= OSLlen(sharedWith); j++ {
+        if OSLequal(OSLcastString(OSLgetItem(sharedWith, j)), requestingUserId) {
+          allowed = true
+        }
+      }
+    }
+  }
+  if (allowed != true) {
+    c.JSON(403, map[string]any{
+      "ok": false,
+      "error": "not authorized to view this image",
+    })
+    return
+  }
+  var path string = (((("db/" + ownerId) + "/blob/") + id) + ".jpg")
+  if (fs.Exists(path) != true) {
+    c.JSON(404, map[string]any{
+      "ok": false,
+      "error": "not found",
+    })
+    return
+  }
+  c.File(path)
+}
+func handleSharedImageInfo(c *gin.Context) {
+  var ownerUsername string = OSLcastString(c.Param("owner"))
+  var id string = OSLcastString(c.Param("id"))
+  var requestingUserId string = ""
+  var sessionId string = OSLcastString(OSLgetItem(OSLcastArray(c.Cookie("session_id")), 1))
+  if OSLnotEqual(sessionId, "") && OSLcontains(sessions, sessionId) {
+    requestingUserId = OSLcastString(OSLgetItem(sessions, sessionId))
+  }
+  var ownerId string = getUserIdFromUsername(ownerUsername)
+  if OSLequal(ownerId, "") {
+    c.JSON(404, map[string]any{
+      "ok": false,
+      "error": "owner not found",
+    })
+    return
+  }
+  var sharesObj map[string]any = readUserShares(ownerId)
+  var shares []any = OSLcastArray(OSLgetItem(sharesObj, "shares"))
+  var allowed bool = false
+  if OSLequal(requestingUserId, ownerId) {
+    allowed = true
+  }
+  for i := 1; i <= OSLlen(shares); i++ {
+    var share map[string]any = OSLcastObject(OSLgetItem(shares, i))
+    if OSLequal(OSLcastString(OSLgetItem(share, "imageId")), id) {
+      var sharedWith []any = OSLcastArray(OSLgetItem(share, "sharedWith"))
+      for j := 1; j <= OSLlen(sharedWith); j++ {
+        if OSLequal(OSLcastString(OSLgetItem(sharedWith, j)), requestingUserId) {
+          allowed = true
+        }
+      }
+    }
+  }
+  if (allowed != true) {
+    c.JSON(403, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var images []any = readUserImages(ownerId)
+  var img map[string]any = findImage(images, id)
+  if OSLequal(OSLgetItem(img, "id"), nil) {
+    c.JSON(404, map[string]any{
+      "ok": false,
+      "error": "not found",
+    })
+    return
+  }
+  OSLsetItem(img, "owner", ownerUsername)
+  c.JSON(200, img)
+}
+func handlePreview(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) && (OSLgetItem(able, "hasImages") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var id string = OSLcastString(c.Param("id"))
+  var path string = (((("db/" + userId) + "/blob/") + id) + ".jpg")
+  servePreview(c, path, id, userId)
+}
+func handleDeleteImage(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var id string = OSLcastString(c.Param("id"))
+  var base string = ("db/" + userId)
+  var path string = (((base + "/blob/") + id) + ".jpg")
+  var binBase string = (base + "/bin")
+  if (fs.Exists(binBase) != true) {
+    fs.MkdirAll(binBase)
+  }
+  var data []byte = fs.ReadFileBytes(path)
+  if OSLcastNumber(OSLlen(data)) > OSLcastNumber(0) {
+    var imgFile = img.DecodeBytes(data)
+    if OSLnotEqual(imgFile, nil) {
+      var s map[string]any = OSLcastObject(imgFile.Size())
+      var w int = OSLround(OSLgetItem(s, "w"))
+      var h int = OSLround(OSLgetItem(s, "h"))
+      var resized = img.Resize(imgFile, w, h)
+      if OSLequal(resized, nil) {
+        c.JSON(500, map[string]any{
+          "ok": false,
+          "error": "resize failed",
+        })
+        return
+      }
+      var binPath string = (((binBase + "/") + id) + ".jpg")
+      var wrote bool = img.SaveJPEG(resized, binPath, 90)
+      if wrote {
+        var binArr []any = readUserBin(userId)
+        var tsms float64 = OSLcastNumber(time.Now().UnixMilli())
+        var arr []any = readUserImages(userId)
+        var it map[string]any = findImage(arr, id)
+        var origTs float64 = OSLcastNumber(OSLgetItem(it, "timestamp"))
+        if OSLequal(origTs, 0) {
+          origTs = tsms
+        }
+        var entry map[string]any = map[string]any{
+          "id": id,
+          "width": w,
+          "height": h,
+          "timestamp": origTs,
+          "deletedAt": tsms,
+        }
+        OSLappend(&(binArr), entry)
+        writeUserBin(userId, binArr)
+      }
+    }
+  }
+  if fs.Exists(path) {
+    fs.Remove(path)
+  }
+  var arr []any = readUserImages(userId)
+  var out []any = removeImage(arr, id)
+  writeUserImages(userId, out)
+  c.JSON(200, map[string]any{
+    "ok": true,
+  })
+}
+func handleDeleteImages(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var ids any = OSLgetItem(JsonParse(OSLcastString(OSLgetItem(OSLgetItem(c, "request"), "body"))), "ids")
+  if OSLequal(OSLlen(ids), 0) {
+    c.JSON(400, map[string]any{
+      "ok": false,
+      "error": "missing ids",
+    })
+    return
+  }
+  if OSLnotEqual(OSLtypeof(ids), "array") {
+    c.JSON(400, map[string]any{
+      "ok": false,
+      "error": "invalid ids",
+    })
+    return
+  }
+  for i := 1; i <= OSLlen(ids); i++ {
+    fs.Remove((((("db/" + userId) + "/blob/") + OSLcastString(OSLgetItem(ids, i))) + ".jpg"))
+  }
+  var arr []any = readUserImages(userId)
+  var out []any = removeImages(arr, ids.([]any))
+  writeUserImages(userId, out)
+  c.JSON(200, map[string]any{
+    "ok": true,
+  })
+}
+func handleBinList(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var arr []any = readUserBin(userId)
+  c.JSON(200, arr)
+}
+func handleBinRestore(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var id string = OSLcastString(c.Param("id"))
+  var base string = ("db/" + userId)
+  var binPath string = (((base + "/bin/") + id) + ".jpg")
+  var blobPath string = (((base + "/blob/") + id) + ".jpg")
+  var imgFile = img.Open(binPath)
+  if OSLequal(imgFile, nil) {
+    c.JSON(404, map[string]any{
+      "ok": false,
+      "error": "not found",
+    })
+    return
+  }
+  defer imgFile.Close()
+  var size map[string]any = OSLcastObject(imgFile.Size())
+  var w int = OSLround(OSLgetItem(size, "w"))
+  var h int = OSLround(OSLgetItem(size, "h"))
+  var resized = img.Resize(imgFile, w, h)
+  if OSLequal(resized, nil) {
+    c.JSON(500, map[string]any{
+      "ok": false,
+      "error": "failed to resize",
+    })
+    return
+  }
+  defer resized.Close()
+  var wrote bool = img.SaveJPEG(resized, blobPath, 90)
+  if (wrote != true) {
+    c.JSON(500, map[string]any{
+      "ok": false,
+      "error": "failed to restore",
+    })
+    return
+  }
+  var binArr []any = readUserBin(userId)
+  var newBin []any = []any{}
+  var ts float64 = OSLcastNumber(time.Now().UnixMilli())
+  for i := 1; i <= OSLlen(binArr); i++ {
+    var it map[string]any = OSLcastObject(OSLgetItem(binArr, i))
+    if OSLnotEqual(OSLcastString(OSLgetItem(it, "id")), id) {
+      OSLappend(&(newBin), it)
+    } else {
+      ts = OSLcastNumber(OSLgetItem(it, "timestamp"))
+    }
+  }
+  writeUserBin(userId, newBin)
+  var arr []any = readUserImages(userId)
+  var entry map[string]any = map[string]any{
+    "id": id,
+    "width": w,
+    "height": h,
+    "timestamp": ts,
+  }
+  OSLappend(&(arr), entry)
+  writeUserImages(userId, arr)
+  fs.Remove(binPath)
+  c.JSON(200, map[string]any{
+    "ok": true,
+  })
+}
+func handleBinDelete(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var id string = OSLcastString(c.Param("id"))
+  var base string = ("db/" + userId)
+  var binPath string = (((base + "/bin/") + id) + ".jpg")
+  if fs.Exists(binPath) {
+    fs.Remove(binPath)
+  }
+  var binArr []any = readUserBin(userId)
+  var newBin []any = []any{}
+  for i := 1; i <= OSLlen(binArr); i++ {
+    var it map[string]any = OSLcastObject(OSLgetItem(binArr, i))
+    if OSLnotEqual(OSLcastString(OSLgetItem(it, "id")), id) {
+      OSLappend(&(newBin), it)
+    }
+  }
+  writeUserBin(userId, newBin)
+  c.JSON(200, map[string]any{
+    "ok": true,
+  })
+}
+func handleBinEmpty(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  writeUserBin(userId, []any{})
+  var base string = ("db/" + userId)
+  var binDir string = (base + "/bin")
+  fs.Remove(binDir)
+  fs.Mkdir(binDir)
+  c.JSON(200, map[string]any{
+    "ok": true,
+  })
+}
+func handleAlbums(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) && (OSLgetItem(able, "hasImages") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var albums map[string]any = readUserAlbums(userId)
+  c.JSON(200, OSLgetItem(albums, "albums"))
+}
+func handleAlbumCreate(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var name string = OSLcastString(c.Query("name"))
+  if OSLequal(name, "") {
+    c.JSON(400, map[string]any{
+      "ok": false,
+      "error": "missing name",
+    })
+    return
+  }
+  var albums map[string]any = addAlbum(userId, name)
+  c.JSON(200, OSLgetItem(albums, "albums"))
+}
+func handleAlbumDelete(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var name string = OSLcastString(c.Param("name"))
+  var albums map[string]any = removeAlbumDef(userId, name)
+  c.JSON(200, OSLgetItem(albums, "albums"))
+}
+func handleAlbumImages(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var name string = OSLcastString(c.Param("name"))
+  var albums map[string]any = readUserAlbums(userId)
+  var ids []any = OSLcastArray(OSLgetItem(OSLgetItem(albums, "items"), name))
+  var all []any = readUserImages(userId)
+  var out []any = []any{}
+  for i := 1; i <= OSLlen(ids); i++ {
+    var id string = OSLcastString(OSLgetItem(ids, i))
+    var it map[string]any = findImage(all, id)
+    if OSLnotEqual(OSLgetItem(it, "id"), nil) {
+      OSLappend(&(out), it)
+    }
+  }
+  c.JSON(200, out)
+}
+func handleAlbumAdd(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var name string = OSLcastString(c.Param("name"))
+  var id string = OSLcastString(c.Query("id"))
+  if OSLequal(name, "") || OSLequal(id, "") {
+    c.JSON(400, map[string]any{
+      "ok": false,
+      "error": "missing params",
+    })
+    return
+  }
+  addImageToAlbum(userId, name, id)
+  c.JSON(200, map[string]any{
+    "ok": true,
+  })
+}
+func handleAlbumRemove(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var name string = OSLcastString(c.Param("name"))
+  var id string = OSLcastString(c.Query("id"))
+  if OSLequal(name, "") || OSLequal(id, "") {
+    c.JSON(400, map[string]any{
+      "ok": false,
+      "error": "missing params",
+    })
+    return
+  }
+  removeImageFromAlbum(userId, name, id)
+  c.JSON(200, map[string]any{
+    "ok": true,
+  })
+}
+func handleBinPreview(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var able map[string]any = getAble(userId)
+  if (OSLgetItem(able, "canAccess") != true) && (OSLgetItem(able, "hasImages") != true) {
+    c.JSON(401, map[string]any{
+      "ok": false,
+      "error": "not authorized",
+    })
+    return
+  }
+  var id string = OSLcastString(c.Param("id"))
+  var path string = (((("db/" + userId) + "/bin/") + id) + ".jpg")
+  servePreview(c, path, id, userId)
+}
+func handleShareInfo(c *gin.Context) {
+  var userId string = OSLcastString(c.MustGet("userId"))
+  var imageId string = OSLcastString(c.Param("id"))
+  var sharesObj map[string]any = readUserShares(userId)
+  var shares []any = OSLcastArray(OSLgetItem(sharesObj, "shares"))
+  for i := 1; i <= OSLlen(shares); i++ {
+    var share map[string]any = OSLcastObject(OSLgetItem(shares, i))
+    if OSLequal(OSLcastString(OSLgetItem(share, "imageId")), imageId) {
+      c.JSON(200, map[string]any{
+        "ok": true,
+        "sharedWith": OSLgetItem(share, "sharedWith"),
+        "isPublic": OSLgetItem(share, "isPublic"),
+      })
+      return
+    }
+  }
+  c.JSON(200, map[string]any{
+    "ok": true,
+    "sharedWith": []any{},
+  })
+}
+func handleDirectImage(c *gin.Context) {
+  var ownerUsername string = OSLcastString(c.Param("username"))
+  var id string = OSLcastString(c.Param("id"))
+  var sessionId string = OSLcastString(OSLgetItem(OSLcastArray(c.Cookie("session_id")), 1))
+  var requestingUserId string = ""
+  if OSLnotEqual(sessionId, "") && OSLcontains(sessions, sessionId) {
+    requestingUserId = OSLcastString(OSLgetItem(sessions, sessionId))
+  }
+  var ownerId string = getUserIdFromUsername(ownerUsername)
+  if OSLequal(ownerId, "") {
+    if OSLequal(requestingUserId, "") {
+      c.Redirect(302, "/auth")
+      return
+    }
+    c.HTML(404, "error.html", map[string]any{
+      "Title": "Not Found",
+      "Message": "User not found.",
+    })
+    return
+  }
+  var allowed bool = OSLequal(ownerId, requestingUserId)
+  if (allowed != true) {
+    var sharesObj map[string]any = readUserShares(ownerId)
+    var shares []any = OSLcastArray(OSLgetItem(sharesObj, "shares"))
+    for i := 1; i <= OSLlen(shares); i++ {
+      var share map[string]any = OSLcastObject(OSLgetItem(shares, i))
+      if OSLequal(OSLcastString(OSLgetItem(share, "imageId")), id) {
+        if OSLequal(OSLgetItem(share, "isPublic"), true) {
+          allowed = true
+          break
+        }
+        var sharedWith []any = OSLcastArray(OSLgetItem(share, "sharedWith"))
+        for j := 1; j <= OSLlen(sharedWith); j++ {
+          if OSLequal(OSLcastString(OSLgetItem(sharedWith, j)), requestingUserId) {
+            allowed = true
+            break
+          }
+        }
+        if allowed {
+          break
+        }
+      }
+    }
+  }
+  if (allowed != true) {
+    if OSLequal(requestingUserId, "") {
+      c.Redirect(302, "/auth")
+      return
+    }
+    c.HTML(403, "error.html", map[string]any{
+      "Title": "Access Denied",
+      "Message": "You don't have access to this image.",
+    })
+    return
+  }
+  var path string = (((("db/" + ownerId) + "/blob/") + id) + ".jpg")
+  if (fs.Exists(path) != true) || fs.IsDir(path) {
+    if OSLequal(requestingUserId, "") {
+      c.Redirect(302, "/auth")
+      return
+    }
+    c.HTML(404, "error.html", map[string]any{
+      "Title": "Not Found",
+      "Message": "Image not found.",
+    })
+    return
+  }
+  c.File(path)
 }
 
 
@@ -3603,6 +3879,8 @@ func servePreview(c *gin.Context, path string, id string, username string) bool 
 
 var sessions map[string]any = map[string]any{}
 var userData map[string]any = map[string]any{}
+var userIdToUsername map[string]any = map[string]any{}
+var usernameToUserId map[string]any = map[string]any{}
 var useSubscriptions bool = false
 var subscriptionSizes map[string]any = map[string]any{}
 var quotas map[string]any = map[string]any{}

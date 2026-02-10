@@ -48,12 +48,11 @@ def loadConfig() (
     )
 )
 
-def getAble(string username) object (
-    username = username.toLower()
-    object profile = userData[username]
+def getAble(string userId) object (
+    object profile = userData[userId]
     if profile == null (
-        if fs.Exists("db/" ++ username ++ "/user.json") (
-            string data = fs.ReadFile("db/" ++ username ++ "/user.json")
+        if fs.Exists("db/" ++ userId ++ "/user.json") (
+            string data = fs.ReadFile("db/" ++ userId ++ "/user.json")
             profile = data.JsonParse().assert(object)
         ) else (
             return { canAccess: false, maxUpload: "0" }
@@ -61,14 +60,14 @@ def getAble(string username) object (
     )
     string subscription = profile.subscription.toStr().toLower()
     number quota = 0
-    any maybeQuota = quotas[username.toLower()]
+    any maybeQuota = quotas[userId]
     if maybeQuota != null (
         quota = maybeQuota.toNum()
     ) else if useSubscriptions (
         quota = subscriptionSizes[subscription].toNum()
     )
 
-    array images = readUserImages(username)
+    array images = readUserImages(userId)
     
     return {
         canAccess: (quota > 0),
@@ -89,36 +88,45 @@ def getProfile(string username) object (
     return { ok: true, profile: profile }
 )
 
-def writeProfile(string username) object (
+def writeProfile(string userId, string username) object (
     object profileReq = getProfile(username)
     if !profileReq.ok (
         return profileReq
     )
-    userData[username.toLower()] = profileReq.profile
-    fs.MkdirAll("db/" ++ username.toLower())
-    fs.WriteFile("db/" ++ username.toLower() ++ "/user.json", profileReq.profile.toStr())
+    userData[userId] = profileReq.profile
+    userIdToUsername[userId] = username
+    usernameToUserId[username] = userId
+    fs.MkdirAll("db/" ++ userId)
+    fs.WriteFile("db/" ++ userId ++ "/user.json", profileReq.profile.toStr())
     return profileReq
 )
 
-def userDbPath(string username) string (
-    return "db/" ++ username.toLower() ++ "/images.json"
+def getUserIdFromUsername(string username) string (
+    if usernameToUserId.contains(username) (
+        return usernameToUserId[username].toStr()
+    )
+    return ""
 )
 
-def ensureUserDb(string username) (
-    string dir = "db/" ++ username.toLower()
+def userDbPath(string userId) string (
+    return "db/" ++ userId ++ "/images.json"
+)
+
+def ensureUserDb(string userId) (
+    string dir = "db/" ++ userId
     if !fs.Exists(dir) (
         fs.MkdirAll(dir)
     )
-    string path = userDbPath(username)
+    string path = userDbPath(userId)
     if !fs.Exists(path) (
         fs.WriteFile(path, "[]")
     )
-    ensureCacheDir(username)
+    ensureCacheDir(userId)
 )
 
-def readUserImages(string username) array (
-    ensureUserDb(username)
-    string path = userDbPath(username)
+def readUserImages(string userId) array (
+    ensureUserDb(userId)
+    string path = userDbPath(userId)
     string data = fs.ReadFile(path)
     if data == "" (
         return []
@@ -127,8 +135,8 @@ def readUserImages(string username) array (
     return arr
 )
 
-def enrichImagesWithSharing(string username, array images) array (
-    object sharesObj = readUserShares(username)
+def enrichImagesWithSharing(string userId, array images) array (
+    object sharesObj = readUserShares(userId)
     array shares = sharesObj.shares
     for i images.len (
         object img = images[i]
@@ -143,8 +151,8 @@ def enrichImagesWithSharing(string username, array images) array (
     return images
 )
 
-def writeUserImages(string username, array arr) boolean (
-    string path = userDbPath(username)
+def writeUserImages(string userId, array arr) boolean (
+    string path = userDbPath(userId)
     string out = arr.toStr()
     return fs.WriteFile(path, out)
 )
@@ -181,24 +189,24 @@ def removeImages(array arr, array ids) array (
     return out
 )
 
-def userAlbumsPath(string username) string (
-    return "db/" ++ username.toLower() ++ "/albums.json"
+def userAlbumsPath(string userId) string (
+    return "db/" ++ userId ++ "/albums.json"
 )
 
-def ensureUserAlbums(string username) (
-    string dir = "db/" ++ username.toLower()
+def ensureUserAlbums(string userId) (
+    string dir = "db/" ++ userId
     if !fs.Exists(dir) (
         fs.MkdirAll(dir)
     )
-    string path = userAlbumsPath(username)
+    string path = userAlbumsPath(userId)
     if !fs.Exists(path) (
         fs.WriteFile(path, "{ \"albums\": [], \"items\": {} }")
     )
 )
 
-def readUserAlbums(string username) object (
-    ensureUserAlbums(username)
-    string path = userAlbumsPath(username)
+def readUserAlbums(string userId) object (
+    ensureUserAlbums(userId)
+    string path = userAlbumsPath(userId)
     string data = fs.ReadFile(path)
     if data == "" (
         return { albums: [], items: {} }
@@ -213,14 +221,14 @@ def readUserAlbums(string username) object (
     return obj
 )
 
-def writeUserAlbums(string username, object albums) boolean (
-    string path = userAlbumsPath(username)
+def writeUserAlbums(string userId, object albums) boolean (
+    string path = userAlbumsPath(userId)
     string out = albums.toStr()
     return fs.WriteFile(path, out)
 )
 
-def addAlbum(string username, string name) object (
-    object albums = readUserAlbums(username)
+def addAlbum(string userId, string name) object (
+    object albums = readUserAlbums(userId)
     array list = albums.albums
     boolean exists = false
     for i list.len (
@@ -236,12 +244,12 @@ def addAlbum(string username, string name) object (
         object items = albums.items
         items[name] = []
     )
-    writeUserAlbums(username, albums)
+    writeUserAlbums(userId, albums)
     return albums
 )
 
-def removeAlbumDef(string username, string name) object (
-    object albums = readUserAlbums(username)
+def removeAlbumDef(string userId, string name) object (
+    object albums = readUserAlbums(userId)
     array list = albums.albums
     array out = []
     for i list.len (
@@ -252,12 +260,12 @@ def removeAlbumDef(string username, string name) object (
     )
     albums.albums = out
     albums.items.delete(name)
-    writeUserAlbums(username, albums)
+    writeUserAlbums(userId, albums)
     return albums
 )
 
-def addImageToAlbum(string username, string name, string id) object (
-    object albums = readUserAlbums(username)
+def addImageToAlbum(string userId, string name, string id) object (
+    object albums = readUserAlbums(userId)
     object items = albums.items
     if albums.items[name] == null (
         items[name] = []
@@ -272,13 +280,13 @@ def addImageToAlbum(string username, string name, string id) object (
     if !exists (
         ids.append(id)
         items[name] = ids
-        writeUserAlbums(username, albums)
+        writeUserAlbums(userId, albums)
     )
     return albums
 )
 
-def removeImageFromAlbum(string username, string name, string id) object (
-    object albums = readUserAlbums(username)
+def removeImageFromAlbum(string userId, string name, string id) object (
+    object albums = readUserAlbums(userId)
     array ids = albums.items[name]
     array out = []
     for i ids.len (
@@ -288,35 +296,35 @@ def removeImageFromAlbum(string username, string name, string id) object (
     )
     object items = albums.items
     items[name] = out
-    writeUserAlbums(username, albums)
+    writeUserAlbums(userId, albums)
     return albums
 )
 
-def userBinPath(string username) string (
-    return "db/" ++ username.toLower() ++ "/bin.json"
+def userBinPath(string userId) string (
+    return "db/" ++ userId ++ "/bin.json"
 )
 
-def ensureUserBin(string username) (
-    string dir = "db/" ++ username.toLower()
+def ensureUserBin(string userId) (
+    string dir = "db/" ++ userId
     if !fs.Exists(dir) (
         fs.MkdirAll(dir)
     )
-    string path = userBinPath(username)
+    string path = userBinPath(userId)
     if !fs.Exists(path) (
         fs.WriteFile(path, "[]")
     )
 )
 
-def ensureCacheDir(string username) (
-    string dir = "db/" ++ username.toLower() ++ "/cache"
+def ensureCacheDir(string userId) (
+    string dir = "db/" ++ userId ++ "/cache"
     if !fs.Exists(dir) (
         fs.MkdirAll(dir)
     )
 )
 
-def readUserBin(string username) array (
-    ensureUserBin(username)
-    string path = userBinPath(username)
+def readUserBin(string userId) array (
+    ensureUserBin(userId)
+    string path = userBinPath(userId)
     string data = fs.ReadFile(path)
     if data == "" (
         return []
@@ -325,14 +333,14 @@ def readUserBin(string username) array (
     return arr
 )
 
-def writeUserBin(string username, array arr) boolean (
-    string path = userBinPath(username)
+def writeUserBin(string userId, array arr) boolean (
+    string path = userBinPath(userId)
     string out = arr.toStr()
     return fs.WriteFile(path, out)
 )
 
-def calculateStorageStats(string username) object (
-    string path = "db/" ++ username.toLower() ++ "/blob"
+def calculateStorageStats(string userId) object (
+    string path = "db/" ++ userId ++ "/blob"
     if !fs.Exists(path) (
         return { totalBytes: 0, imageCount: 0, largestImages: [], binBytes: 0, duplicateGroups: [] }
     )
@@ -416,7 +424,7 @@ def calculateStorageStats(string username) object (
         largest.append({ id: entries[i].id, bytes: entries[i].bytes })
     )
     
-    string binPath = "db/" ++ username.toLower() ++ "/bin"
+    string binPath = "db/" ++ userId ++ "/bin"
     number binBytes = 0
     if fs.Exists(binPath) (
         array binFiles = fs.ReadDir(binPath)
@@ -445,24 +453,24 @@ def calculateStorageStats(string username) object (
     }
 )
 
-def userSharesPath(string username) string (
-    return "db/" ++ username.toLower() ++ "/shares.json"
+def userSharesPath(string userId) string (
+    return "db/" ++ userId ++ "/shares.json"
 )
 
-def ensureUserShares(string username) (
-    string dir = "db/" ++ username.toLower()
+def ensureUserShares(string userId) (
+    string dir = "db/" ++ userId
     if !fs.Exists(dir) (
         fs.MkdirAll(dir)
     )
-    string path = userSharesPath(username)
+    string path = userSharesPath(userId)
     if !fs.Exists(path) (
         fs.WriteFile(path, "{ \"shares\": [] }")
     )
 )
 
-def readUserShares(string username) object (
-    ensureUserShares(username)
-    string path = userSharesPath(username)
+def readUserShares(string userId) object (
+    ensureUserShares(userId)
+    string path = userSharesPath(userId)
     string data = fs.ReadFile(path)
     if data == "" (
         return { shares: [] }
@@ -474,12 +482,12 @@ def readUserShares(string username) object (
     return obj
 )
 
-def writeUserShares(string username, object sharesObj) boolean (
-    string path = userSharesPath(username)
+def writeUserShares(string userId, object sharesObj) boolean (
+    string path = userSharesPath(userId)
     return fs.WriteFile(path, sharesObj.toStr())
 )
 
-def addShare(string owner, string imageId, string targetUsername) object (
+def addShare(string owner, string imageId, string targetUserId) object (
     object sharesObj = readUserShares(owner)
     array shares = sharesObj.shares
     
@@ -490,12 +498,12 @@ def addShare(string owner, string imageId, string targetUsername) object (
             array sharedWith = share.sharedWith
             boolean exists = false
             for j sharedWith.len (
-                if sharedWith[j].toStr().toLower() == targetUsername.toLower() (
+                if sharedWith[j].toStr() == targetUserId (
                     exists = true
                 )
             )
             if !exists (
-                sharedWith.append(targetUsername.toLower())
+                sharedWith.append(targetUserId)
                 share.sharedWith = sharedWith
             )
             found = true
@@ -503,7 +511,7 @@ def addShare(string owner, string imageId, string targetUsername) object (
     )
     
     if !found (
-        shares.append({ imageId: imageId, sharedWith: [targetUsername.toLower()] })
+        shares.append({ imageId: imageId, sharedWith: [targetUserId] })
     )
     
     sharesObj.shares = shares
@@ -511,7 +519,7 @@ def addShare(string owner, string imageId, string targetUsername) object (
     return sharesObj
 )
 
-def removeShare(string owner, string imageId, string targetUsername) object (
+def removeShare(string owner, string imageId, string targetUserId) object (
     object sharesObj = readUserShares(owner)
     array shares = sharesObj.shares
     array newShares = []
@@ -522,7 +530,7 @@ def removeShare(string owner, string imageId, string targetUsername) object (
             array sharedWith = share.sharedWith
             array newSharedWith = []
             for j sharedWith.len (
-                if sharedWith[j].toStr().toLower() != targetUsername.toLower() (
+                if sharedWith[j].toStr() != targetUserId (
                     newSharedWith.append(sharedWith[j])
                 )
             )
@@ -559,7 +567,7 @@ def setPublicShare(string owner, string imageId, boolean isPublic) object (
     return sharesObj
 )
 
-def getSharedWithMe(string username) array (
+def getSharedWithMe(string userId) array (
     array results = []
     string dbPath = "db"
     if !fs.Exists(dbPath) (
@@ -579,7 +587,7 @@ def getSharedWithMe(string username) array (
                         object share = shares[j]
                         array sharedWith = share.sharedWith
                         for k sharedWith.len (
-                            if sharedWith[k].toStr().toLower() == username.toLower() (
+                            if sharedWith[k].toStr() == userId (
                                 results.append({
                                     owner: ownerDir,
                                     imageId: share.imageId
@@ -594,8 +602,8 @@ def getSharedWithMe(string username) array (
     return results
 )
 
-def getCachePath(string username, string id) string (
-    return "db/" ++ username.toLower() ++ "/cache/" ++ id ++ "_preview.jpg"
+def getCachePath(string userId, string id) string (
+    return "db/" ++ userId ++ "/cache/" ++ id ++ "_preview.jpg"
 )
 
 def servePreview(*gin.Context c, string path, string id, string username) boolean (

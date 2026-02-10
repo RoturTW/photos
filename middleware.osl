@@ -19,12 +19,17 @@ def requireSession(*gin.Context c) (
         abortUnauthorized(c)
         return
     )
-    string username = sessions[sessionId]
-    if !userData.contains(username.toLower()) (
-        if fs.Exists("db/" ++ username.toLower() ++ "/user.json") (
-            string data = fs.ReadFile("db/" ++ username.toLower() ++ "/user.json")
-            userData[username.toLower()] = data.JsonParse()
+    string userId = sessions[sessionId]
+    if !userData.contains(userId) (
+        if fs.Exists("db/" ++ userId ++ "/user.json") (
+            string data = fs.ReadFile("db/" ++ userId ++ "/user.json")
+            userData[userId] = data.JsonParse()
         )
+    )
+    c.Set("userId", userId)
+    string username = ""
+    if userIdToUsername.contains(userId) (
+        username = userIdToUsername[userId]
     )
     c.Set("username", username)
     c.Next()
