@@ -13,7 +13,7 @@ def requireSession(*gin.Context c) (
     string sessionId = c.Cookie("session_id").toArray()[1].toStr()
     
     if sessionId == "" (
-        sessionId = c.Query("sessionId")
+        sessionId = c.GetHeader("sessionId")
         if sessionId == "" (
             abortUnauthorized(c)
             return
