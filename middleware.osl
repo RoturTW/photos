@@ -11,10 +11,15 @@ def abortUnauthorized(*gin.Context c) (
 
 def requireSession(*gin.Context c) (
     string sessionId = c.Cookie("session_id").toArray()[1].toStr()
+    
     if sessionId == "" (
-        abortUnauthorized(c)
-        return
+        sessionId = c.Query("sessionId")
+        if sessionId == "" (
+            abortUnauthorized(c)
+            return
+        )
     )
+
     if !sessions.contains(sessionId) (
         abortUnauthorized(c)
         return

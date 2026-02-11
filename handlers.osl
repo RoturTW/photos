@@ -37,7 +37,7 @@ def handleAuth(*gin.Context c) (
 
     c.SetCookie("session_id", sessionId, 86400, "/", "", false, true)
 
-    c.JSON(200, { ok: true, token: token })
+    c.JSON(200, { ok: true, sessionId, token })
 )
 
 def handleLogout(*gin.Context c) (
