@@ -2,7 +2,7 @@ import { state } from './modules/state.js';
 import { qs } from './modules/utils.js';
 import {
   apiJSON, apiLogout, apiUpload, apiDelete, apiBinRestore,
-  apiAlbumCreate, apiAlbumAdd, apiRotateImage
+  apiAlbumCreate, apiAlbumAdd, apiRotateImage, apiCompressImage, apiResizeImage, apiImageInfo
 } from './modules/api.js';
 import {
   modalConfirm, modalPrompt, modalSelect,
@@ -177,13 +177,31 @@ async function handleUploadAll(files) {
   refreshCurrentView();
 }
 
-function openContextMenu(e, id) {
+async function openContextMenu(e, id) {
   const menu = qs("contextMenu");
   if (!menu) return;
   menu.innerHTML = "";
 
   const item = state.items.find(i => i.id === id);
   const isMine = item && !item.owner;
+
+  const info = await apiImageInfo(id);
+
+  if (info) {
+    const infoDiv = document.createElement("div");
+    infoDiv.className = "context-menu-info";
+
+    const width = info.width || 0;
+    const height = info.height || 0;
+    const fileSize = info.fileSize || 0;
+    const sizeMB = (fileSize / (1024 * 1024)).toFixed(2);
+
+    infoDiv.innerHTML = `
+      <div class="context-menu-info-item"><i data-lucide="maximize-2"></i> ${width} × ${height} px</div>
+      <div class="context-menu-info-item"><i data-lucide="hard-drive"></i> ${sizeMB} MB</div>
+    `;
+    menu.appendChild(infoDiv);
+  }
 
   const actions = [];
 
@@ -233,6 +251,86 @@ function openContextMenu(e, id) {
     }
   });
 
+  if (isMine) {
+    actions.push({
+      text: "Compress Image...",
+      icon: "minimize-2",
+      fn: async () => {
+        const qualityOptions = [
+          { value: "10", label: "10% - Extreme compression (smallest file)" },
+          { value: "30", label: "30% - High compression" },
+          { value: "50", label: "50% - Medium compression" },
+          { value: "70", label: "70% - Low compression" },
+          { value: "85", label: "85% - Original quality" }
+        ];
+        const quality = await modalSelect("Compress Image", "Choose quality level:", qualityOptions);
+        if (quality) {
+          setStatus("Compressing...");
+          const ok = await apiCompressImage(id, parseInt(quality));
+          setStatus("");
+          if (ok) {
+            showToast(`Compressed to ${quality}% quality`, "success");
+            refreshCurrentView();
+          }
+        }
+      }
+    });
+
+    actions.push({
+      text: "Resize Image...",
+      icon: "maximize-2",
+      fn: async () => {
+        const item = state.items.find(i => i.id === id);
+        const currentW = item ? item.width : 0;
+        const currentH = item ? item.height : 0;
+        const currentSize = currentW > 0 && currentH > 0 ? `${currentW} × ${currentH}` : "Unknown";
+
+        const resizeOptions = [
+          { value: "25", label: "25% - Quarter size" },
+          { value: "50", label: "50% - Half size" },
+          { value: "75", label: "75% - Three-quarters" },
+          { value: "100", label: "100% - Original size" },
+          { value: "150", label: "150% - 1.5x larger" },
+          { value: "200", label: "200% - Double size" },
+          { value: "custom", label: "Custom dimensions..." }
+        ];
+
+        const choice = await modalSelect("Resize Image", `Current size: ${currentSize}\nChoose resize option:`, resizeOptions);
+
+        if (choice === "custom") {
+          const sizeStr = await modalPrompt("Custom Resize", "Enter dimensions (WIDTHxHEIGHT):", `${Math.round(currentW * 0.5)}x${Math.round(currentH * 0.5)}`);
+          if (sizeStr) {
+            const match = sizeStr.match(/^(\d+)x(\d+)$/i);
+            if (match) {
+              const width = parseInt(match[1]);
+              const height = parseInt(match[2]);
+              setStatus("Resizing...");
+              const ok = await apiResizeImage(id, width, height);
+              setStatus("");
+              if (ok) {
+                showToast(`Resized to ${width} × ${height}`, "success");
+                await refreshRotatedImage(id, 0);
+              }
+            } else {
+              showToast("Invalid format. Use WIDTHxHEIGHT (e.g., 1920x1080)", "error");
+            }
+          }
+        } else if (choice) {
+          const percent = parseInt(choice);
+          const newW = Math.round(currentW * (percent / 100));
+          const newH = Math.round(currentH * (percent / 100));
+          setStatus("Resizing...");
+          const ok = await apiResizeImage(id, newW, newH);
+          setStatus("");
+          if (ok) {
+            showToast(`Resized to ${percent}% (${newW} × ${newH})`, "success");
+            await refreshRotatedImage(id, 0);
+          }
+        }
+      }
+    });
+  }
+
   if (state.view !== "bin") {
     actions.push({
       text: "Move to Bin",
@@ -255,14 +353,29 @@ function openContextMenu(e, id) {
   });
 
   menu.style.display = "block";
-  menu.style.left = e.clientX + "px";
-  menu.style.top = e.clientY + "px";
+
+  const rect = menu.getBoundingClientRect();
+  let x = e.clientX;
+  let y = e.clientY;
+
+  // Adjust if menu would go off screen
+  if (x + rect.width > window.innerWidth) {
+    x = window.innerWidth - rect.width - 10;
+  }
+  if (y + rect.height > window.innerHeight) {
+    y = window.innerHeight - rect.height - 10;
+  }
+
+  menu.style.left = x + "px";
+  menu.style.top = y + "px";
 
   lucide.createIcons();
 
   const hide = (ev) => { if (!menu.contains(ev.target)) { menu.style.display = "none"; document.removeEventListener("mousedown", hide); } };
   setTimeout(() => document.addEventListener("mousedown", hide), 10);
 }
+
+window.openContextMenu = openContextMenu;
 
 function toggleSidebar() {
   const app = qs("app");
@@ -364,6 +477,41 @@ window.addEventListener("load", async () => {
       await apiDelete(item.id); closeLightbox(); refreshCurrentView();
     }
   };
+
+  // Add context menu button
+  const lightboxActions = qs(".lightbox-actions");
+  if (lightboxActions && !qs("#lightboxContextMenu")) {
+    const contextBtn = document.createElement("button");
+    contextBtn.className = "btn-icon";
+    contextBtn.id = "lightboxContextMenu";
+    contextBtn.title = "More Options";
+    contextBtn.innerHTML = '<i data-lucide="more-horizontal"></i>';
+    contextBtn.onclick = () => {
+      const item = state.items[state.lightboxIndex];
+      if (item) {
+        const rect = contextBtn.getBoundingClientRect();
+        const fakeEvent = {
+          clientX: rect.right - 50,
+          clientY: rect.top - 10,
+          preventDefault: () => {},
+          target: contextBtn
+        };
+        openContextMenu(fakeEvent, item.id);
+      }
+    };
+    lightboxActions.appendChild(contextBtn);
+    lucide.createIcons();
+  }
+
+  // Add context menu to lightbox image
+  const lightboxImage = qs("lightboxImage");
+  if (lightboxImage) {
+    lightboxImage.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const item = state.items[state.lightboxIndex];
+      if (item) openContextMenu(e, item.id);
+    });
+  }
 
   if (qs("searchInput")) {
     qs("searchInput").onkeypress = (e) => { if (e.key === 'Enter') doSearch(e.target.value); };

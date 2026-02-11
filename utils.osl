@@ -19,16 +19,16 @@ def calculateFileHash(string path) string (
 )
 
 def noCORS(*gin.Context c) (
-    c.Header("Access-Control-Allow-Origin", "*")
     string origin = c.GetHeader("Origin")
+    c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+    c.Header("Access-Control-Allow-Headers", "sessionId")
     if origin != "" (
         c.Header("Access-Control-Allow-Origin", origin)
         c.Header("Access-Control-Allow-Credentials", "true")
         c.Next()
         return
     )
-    c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-    c.Header("Access-Control-Allow-Headers", "*")
+    c.Header("Access-Control-Allow-Origin", "*")
     if c.Request.Method == "OPTIONS" (
         c.AbortWithStatus(204)
         return

@@ -264,7 +264,19 @@ def handleUpload(*gin.Context c) (
     images.append(entry)
     writeUserImages(userId, images)
 
-    c.JSON(200, { ok: true, id: id })
+    if c.Query("public") == "true" (
+        setPublicShare(userId, id, true)
+    )
+
+    c.JSON(200, {
+        ok: true,
+        id: id,
+        path: userId ++ "/" ++ id,
+        owner: {
+            id: userId,
+            username: c.MustGet("username").toStr()
+        }
+    })
 )
 
 def handleId(*gin.Context c) (
@@ -358,6 +370,129 @@ def handleImageRotate(*gin.Context c) (
     )
 
     c.JSON(200, { ok: true })
+)
+
+def handleImageCompress(*gin.Context c) (
+    string userId = c.MustGet("userId").toStr()
+    object able = getAble(userId)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    string id = c.Param("id")
+
+    object body = c.Request.Body.toStr().JsonParse()
+    auto quality = round(body["quality"].toNum())
+    if quality < 10 or quality > 100 (
+        quality = 85
+    )
+
+    string path = "db/" ++ userId ++ "/blob/" ++ id ++ ".jpg"
+    if !fs.Exists(path) or fs.IsDir(path) (
+        c.JSON(404, { ok: false, error: "not found" })
+        return
+    )
+
+    imgFile := img.Open(path)
+    if imgFile == null (
+        c.JSON(400, { ok: false, error: "invalid image" })
+        return
+    )
+    defer imgFile.Close()
+
+    object size = imgFile.Size()
+    auto w = round(size["w"])
+    auto h = round(size["h"])
+
+    resized := img.Resize(imgFile, w, h)
+    defer resized.Close()
+
+    boolean wrote = img.SaveJPEG(resized, path, quality)
+    if !wrote (
+        c.JSON(500, { ok: false, error: "failed to save" })
+        return
+    )
+
+    c.JSON(200, { ok: true, quality: quality })
+)
+
+def handleImageResize(*gin.Context c) (
+    string userId = c.MustGet("userId").toStr()
+    object able = getAble(userId)
+    if !able.canAccess (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    string id = c.Param("id")
+
+    object body = c.Request.Body.toStr().JsonParse()
+    int w = round(body["width"])
+    int h = round(body["height"])
+
+    if w <= 0 or h <= 0 (
+        c.JSON(400, { ok: false, error: "invalid dimensions" })
+        return
+    )
+
+    string path = "db/" ++ userId ++ "/blob/" ++ id ++ ".jpg"
+    if !fs.Exists(path) or fs.IsDir(path) (
+        c.JSON(404, { ok: false, error: "not found" })
+        return
+    )
+
+    imgFile := img.Open(path)
+    if imgFile == null (
+        c.JSON(400, { ok: false, error: "invalid image" })
+        return
+    )
+    defer imgFile.Close()
+
+    resized := img.Resize(imgFile, w, h)
+    if resized == null (
+        c.JSON(500, { ok: false, error: "failed to resize" })
+        return
+    )
+    defer resized.Close()
+
+    boolean wrote = img.SaveJPEG(resized, path, 90)
+    if !wrote (
+        c.JSON(500, { ok: false, error: "failed to save" })
+        return
+    )
+
+    array arr = readUserImages(userId)
+    object it = findImage(arr, id)
+    if it.id != null (
+        it.width = w
+        it.height = h
+        writeUserImages(userId, arr)
+    )
+
+    c.JSON(200, { ok: true, width: w, height: h })
+)
+
+def handleImageInfo(*gin.Context c) (
+    string userId = c.MustGet("userId").toStr()
+    object able = getAble(userId)
+    if !able.canAccess and !able.hasImages (
+        c.JSON(401, { ok: false, error: "not authorized" })
+        return
+    )
+    string id = c.Param("id")
+    object it = findImage(readUserImages(userId), id)
+    if it.id == null (
+        c.JSON(404, { ok: false, error: "not found" })
+        return
+    )
+    string path = "db/" ++ userId ++ "/blob/" ++ id ++ ".jpg"
+    if !fs.Exists(path) or fs.IsDir(path) (
+        c.JSON(404, { ok: false, error: "not found" })
+        return
+    )
+    object stat = fs.GetStat(path)
+    number fileSize = stat.size.toNum()
+    it["fileSize"] = fileSize
+    c.JSON(200, it)
 )
 
 def handleSearch(*gin.Context c) (
@@ -970,18 +1105,24 @@ def handleDirectImage(*gin.Context c) (
     if sessionId != "" and sessions.contains(sessionId) (
         requestingUserId = sessions[sessionId].toStr()
     )
-    
+
     string ownerId = getUserIdFromUsername(ownerUsername)
     if ownerId == "" (
-        if requestingUserId == "" (
-            c.Redirect(302, "/auth")
+        if ownerUsername.len == 36 (
+            // this is a user id
+            ownerId = ownerUsername
+        )
+        if ownerId == "" (
+            if requestingUserId == "" (
+                c.Redirect(302, "/auth")
+                return
+            )
+            c.HTML(404, "error.html", {
+                "Title": "Not Found",
+                "Message": "User not found."
+            })
             return
         )
-        c.HTML(404, "error.html", {
-            "Title": "Not Found",
-            "Message": "User not found."
-        })
-        return
     )
 
     bool allowed = (ownerId == requestingUserId)
@@ -1023,10 +1164,6 @@ def handleDirectImage(*gin.Context c) (
 
     string path = 'db/' ++ ownerId ++ '/blob/' ++ id ++ '.jpg'
     if !fs.Exists(path) or fs.IsDir(path) (
-        if requestingUserId == "" (
-            c.Redirect(302, "/auth")
-            return
-        )
         c.HTML(404, "error.html", {
             "Title": "Not Found",
             "Message": "Image not found."

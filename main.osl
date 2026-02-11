@@ -51,10 +51,11 @@ def main() (
     r.GET("/auth", authPage)
 
     api := r.Group("/api")
-    api.Use(noCORS)
+    api.OPTIONS("/*cors", def(*gin.Context c) -> (
+        c.Status(200)
+    ))
     api.GET("/auth", handleAuth)
     api.GET("/logout", handleLogout)
-    api.POST("/image", requireSession, handleUpload)
     api.GET("/able", requireSession, handleAble)
     api.GET("/storage", requireSession, handleStorage)
     api.GET("/search", requireSession, handleSearch)
@@ -74,9 +75,14 @@ def main() (
     images.DELETE("delete", requireSession, handleDeleteImages)
 
     image := api.Group("/image")
+    image.POST("", requireSession, handleUpload)
+    image.POST("/upload", requireSession, handleUpload)
     image.DELETE("/:id", requireSession, handleDeleteImage)
     image.GET("/:id", requireSession, handleId)
+    image.GET("/:id/info", requireSession, handleImageInfo)
     image.POST("/:id/rotate", requireSession, handleImageRotate)
+    image.POST("/:id/compress", requireSession, handleImageCompress)
+    image.POST("/:id/resize", requireSession, handleImageResize)
     image.GET("/preview/:id", requireSession, handlePreview)
 
     albums := api.Group("/albums")

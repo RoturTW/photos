@@ -148,3 +148,25 @@ export async function apiRotateImage(id, angle) {
     });
     return res.ok;
 }
+
+export async function apiCompressImage(id, quality) {
+    const res = await fetch(`/api/image/${encodeURIComponent(id)}/compress`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quality })
+    });
+    return res.ok;
+}
+
+export async function apiResizeImage(id, width, height) {
+    const res = await fetch(`/api/image/${encodeURIComponent(id)}/resize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ width, height })
+    });
+    return res.ok;
+}
+
+export async function apiImageInfo(id) {
+    return await apiJSON(`/api/image/${encodeURIComponent(id)}/info`);
+}

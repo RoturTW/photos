@@ -39,6 +39,8 @@ export function openLightbox(id) {
     updateLightboxFavoriteBtn();
     updateURLForImage(item);
 
+    lucide.createIcons();
+
     lightbox.classList.add("active");
     document.body.style.overflow = "hidden";
 }
