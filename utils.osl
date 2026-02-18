@@ -608,10 +608,19 @@ def getCachePath(string userId, string id) string (
 
 def servePreview(*gin.Context c, string path, string id, string username) boolean (
     if !fs.Exists(path) or fs.IsDir(path) (
+        if c.Request.Method == "HEAD" (
+            c.Status(404)
+            return false
+        )
         c.JSON(404, { ok: false, error: "not found" })
         return false
     )
-    
+
+    if c.Request.Method == "HEAD" (
+        c.Status(200)
+        return true
+    )
+
     string cachePath = getCachePath(username, id)
     if fs.Exists(cachePath) (
         object cacheInfo = fs.GetStat(cachePath)

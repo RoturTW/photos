@@ -303,10 +303,19 @@ def handleId(*gin.Context c) (
     )
     string path = "db/" ++ userId ++ "/blob/" ++ id ++ ".jpg"
     if !fs.Exists(path) or fs.IsDir(path) (
+        if c.Request.Method == "HEAD" (
+            c.Status(404)
+            return
+        )
         c.JSON(404, { ok: false, error: "not found" })
         return
     )
-    
+
+    if c.Request.Method == "HEAD" (
+        c.Status(200)
+        return
+    )
+
     object fileInfo = fs.GetStat(path)
     string etag = "\"" ++ fileInfo.modTime.toStr() ++ "\""
     string ifNoneMatch = c.GetHeader("If-None-Match")
@@ -314,7 +323,7 @@ def handleId(*gin.Context c) (
         c.Status(304)
         return
     )
-    
+
     c.Header("ETag", etag)
     c.Header("Cache-Control", "private, must-revalidate")
     c.File(path)
@@ -612,18 +621,18 @@ def handleShareOthers(*gin.Context c) (
 def handleSharePatch(*gin.Context c) (
     string userId = c.MustGet("userId").toStr()
     string imageId = c.Param("id")
-    
+
     object body = c.Request.Body.toStr().JsonParse()
     array add = body["add"]
     array remove = body["remove"]
-    
+
     if add == null (
         add = []
     )
     if remove == null (
         remove = []
     )
-    
+
     for i add.len (
         string targetUsername = add[i].toStr()
         string targetUserId = getUserIdFromUsername(targetUsername)
@@ -632,17 +641,22 @@ def handleSharePatch(*gin.Context c) (
         )
     )
     for i remove.len (
-        string targetUsername = remove[i].toStr()
-        string targetUserId = getUserIdFromUsername(targetUsername)
+        string targetOrUserId = remove[i].toStr()
+        string targetUserId = ""
+        if targetOrUserId.len == 36 (
+            targetUserId = targetOrUserId
+        ) else (
+            targetUserId = getUserIdFromUsername(targetOrUserId)
+        )
         if targetUserId != "" (
             removeShare(userId, imageId, targetUserId)
         )
     )
-    
+
     if body["isPublic"] != null (
         setPublicShare(userId, imageId, body["isPublic"].toBool())
     )
-    
+
     c.JSON(200, { ok: true })
 )
 
@@ -694,33 +708,54 @@ def handleSharedImage(*gin.Context c) (
     object sharesObj = readUserShares(ownerId)
     array shares = sharesObj.shares
     bool allowed = false
-    
+
     if requestingUserId == ownerId (
         allowed = true
     )
-    
+
     for i shares.len (
         object share = shares[i]
         if share.imageId.toStr() == id (
+            if share.isPublic == true (
+                allowed = true
+                break
+            )
             array sharedWith = share.sharedWith
             for j sharedWith.len (
                 if sharedWith[j].toStr() == requestingUserId (
                     allowed = true
                 )
             )
+            if allowed (
+                break
+            )
         )
     )
-    
+
     if !allowed (
+        if c.Request.Method == "HEAD" (
+            c.Status(404)
+            return
+        )
         c.JSON(403, { ok: false, error: "not authorized to view this image" })
         return
     )
-    
+
     string path = "db/" ++ ownerId ++ "/blob/" ++ id ++ ".jpg"
     if !fs.Exists(path) (
+        if c.Request.Method == "HEAD" (
+            c.Status(404)
+            return
+        )
         c.JSON(404, { ok: false, error: "not found" })
         return
     )
+
+    if c.Request.Method == "HEAD" (
+        c.Status(200)
+        return
+    )
+
     c.File(path)
 )
 
@@ -729,26 +764,26 @@ def handleSharedImageInfo(*gin.Context c) (
     string ownerUsername = c.Param("owner")
     string id = c.Param("id")
     string requestingUserId = ""
-    
+
     string sessionId = c.Cookie("session_id").toArray()[1].toStr()
     if sessionId != "" and sessions.contains(sessionId) (
         requestingUserId = sessions[sessionId].toStr()
     )
-    
+
     string ownerId = getUserIdFromUsername(ownerUsername)
     if ownerId == "" (
         c.JSON(404, { ok: false, error: "owner not found" })
         return
     )
-    
+
     object sharesObj = readUserShares(ownerId)
     array shares = sharesObj.shares
     bool allowed = false
-    
+
     if requestingUserId == ownerId (
         allowed = true
     )
-    
+
     for i shares.len (
         object share = shares[i]
         if share.imageId.toStr() == id (
@@ -760,20 +795,20 @@ def handleSharedImageInfo(*gin.Context c) (
             )
         )
     )
-    
+
     if !allowed (
         c.JSON(403, { ok: false, error: "not authorized" })
         return
     )
-    
+
     array images = readUserImages(ownerId)
     object img = findImage(images, id)
     if img.id == null (
         c.JSON(404, { ok: false, error: "not found" })
         return
     )
-    
-    img["owner"] = ownerUsername
+
+    img["owner"] = ownerId
     c.JSON(200, img)
 )
 
@@ -1081,19 +1116,42 @@ def handleBinPreview(*gin.Context c) (
 def handleShareInfo(*gin.Context c) (
     string userId = c.MustGet("userId").toStr()
     string imageId = c.Param("id")
-    
+
     object sharesObj = readUserShares(userId)
     array shares = sharesObj.shares
-    
+
     for i shares.len (
         object share = shares[i]
         if share.imageId.toStr() == imageId (
-            c.JSON(200, { ok: true, sharedWith: share.sharedWith, isPublic: share.isPublic })
+            array sharedWith = share.sharedWith
+            array sharedWithInfo = []
+            for j sharedWith.len (
+                string targetUserId = sharedWith[j].toStr()
+                string targetUsername = ""
+                if userIdToUsername.contains(targetUserId) (
+                    targetUsername = userIdToUsername[targetUserId]
+                ) else if userData.contains(targetUserId) (
+                    object profile = userData[targetUserId]
+                    if profile.username != null (
+                        targetUsername = profile.username.toStr()
+                    )
+                ) else if fs.Exists("db/" ++ targetUserId ++ "/user.json") (
+                    string data = fs.ReadFile("db/" ++ targetUserId ++ "/user.json")
+                    object profile = data.JsonParse()
+                    if profile.username != null (
+                        targetUsername = profile.username.toStr()
+                        userData[targetUserId] = profile
+                        userIdToUsername[targetUserId] = targetUsername
+                    )
+                )
+                sharedWithInfo.append({ userId: targetUserId, username: targetUsername })
+            )
+            c.JSON(200, { ok: true, sharedWith: sharedWithInfo, isPublic: share.isPublic, ownerId: userId })
             return
         )
     )
-    
-    c.JSON(200, { ok: true, sharedWith: [] })
+
+    c.JSON(200, { ok: true, sharedWith: [], ownerId: userId })
 )
 
 def handleDirectImage(*gin.Context c) (
@@ -1151,6 +1209,10 @@ def handleDirectImage(*gin.Context c) (
     )
     
     if !allowed (
+        if c.Request.Method == "HEAD" (
+            c.Status(404)
+            return
+        )
         if requestingUserId == "" (
             c.Redirect(302, "/auth")
             return
@@ -1164,10 +1226,19 @@ def handleDirectImage(*gin.Context c) (
 
     string path = 'db/' ++ ownerId ++ '/blob/' ++ id ++ '.jpg'
     if !fs.Exists(path) or fs.IsDir(path) (
+        if c.Request.Method == "HEAD" (
+            c.Status(404)
+            return
+        )
         c.HTML(404, "error.html", {
             "Title": "Not Found",
             "Message": "Image not found."
         })
+        return
+    )
+
+    if c.Request.Method == "HEAD" (
+        c.Status(200)
         return
     )
 

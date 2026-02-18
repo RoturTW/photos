@@ -35,6 +35,11 @@ def requireSession(*gin.Context c) (
     string username = ""
     if userIdToUsername.contains(userId) (
         username = userIdToUsername[userId]
+    ) else if userData.contains(userId) (
+        object profile = userData[userId]
+        if profile.username != null (
+            username = profile.username.toStr()
+        )
     )
     c.Set("username", username)
     c.Next()

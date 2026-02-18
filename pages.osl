@@ -13,6 +13,7 @@ def homePage(*gin.Context c) (
 
     c.HTML(200, "index.html", {
         "Username": username,
+        "UserId": userId,
         "Subscription": userData[userId].subscription,
     })
 )

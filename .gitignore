@@ -35,3 +35,4 @@ db
 main
 config.json
 photos
+.DS_Store

@@ -101,6 +101,10 @@ def main() (
     bin.GET("/preview/:id", requireSession, handleBinPreview)
 
     r.GET("/:username/:id", handleDirectImage)
+    r.HEAD("/:username/:id", handleDirectImage)
+    r.OPTIONS("/:username/:id", def(*gin.Context c) -> (
+        c.Status(200)
+    ))
 
     r.Run(":5607")
 )

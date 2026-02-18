@@ -9,8 +9,8 @@ export async function openShareManagement(id) {
   const sharedWith = info.sharedWith || [];
   const isPublic = info.isPublic || false;
 
-  const myUser = document.querySelector(".user-dropdown-name")?.textContent?.trim();
-  const path = `/${myUser}/${id}`;
+  const ownerId = info.ownerId || document.body.getAttribute("data-user-id");
+  const path = `/${ownerId}/${id}`;
   const fullUrl = window.location.origin + path;
 
   const renderContent = () => {
@@ -39,13 +39,14 @@ export async function openShareManagement(id) {
       html += '<p style="opacity: 0.6; padding: 12px; font-size: 14px; background: var(--bg-secondary); border-radius: 8px;">Not shared with any specific users.</p>';
     } else {
       sharedWith.forEach(u => {
+        const displayName = u.username || u.userId;
         html += `
           <div class="share-item">
-            <img class="share-user-avatar" src="https://avatars.rotur.dev/${u}" onerror="this.src='https://avatars.rotur.dev/default'">
+            <img class="share-user-avatar" src="https://avatars.rotur.dev/${displayName}" onerror="this.src='https://avatars.rotur.dev/default'">
             <div class="share-user-info">
-              <span class="share-user-name">${u}</span>
+              <span class="share-user-name">${displayName}</span>
             </div>
-            <button class="btn-remove-user" data-user="${u}">
+            <button class="btn-remove-user" data-user="${u.userId}">
               <i data-lucide="user-minus"></i>
             </button>
           </div>
