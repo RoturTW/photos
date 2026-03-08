@@ -114,12 +114,13 @@ export function showToast(message, type = "info") {
     toast.className = `toast ${type}`;
     toast.textContent = message;
 
-    container.appendChild(toast);
+  container.appendChild(toast);
+  setTimeout(() => toast.classList.add("show"), 10);
 
-    setTimeout(() => {
-        toast.classList.remove("show");
-        setTimeout(() => toast.remove(), 300);
-    }, 3000);
+  setTimeout(() => {
+    toast.classList.remove("show");
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
 }
 
 export function setStatus(msg) {

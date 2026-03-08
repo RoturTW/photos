@@ -1,7 +1,8 @@
 import { state } from './state.js';
 import { apiJSON, apiBinList, apiBinEmpty, apiShareOthers, apiShareMine, apiAlbums, apiAlbumImages, apiAlbumDelete } from './api.js';
 import { setStatus, setViewTitle, setActiveNav, clearActiveNav, modalConfirm } from './ui.js';
-import { render, renderStorage } from './gallery.js';
+import { render } from './gallery.js';
+import { renderStorage } from './storage.js';
 import { qs } from './utils.js';
 
 export async function loadRecent() {

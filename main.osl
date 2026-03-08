@@ -41,7 +41,7 @@ def main() (
 
     loadConfig()
 
-    r := gin.Default()
+    auto r = gin.Default()
     r.Use(noCORS)
 
     r.LoadHTMLGlob("templates/*")
@@ -50,8 +50,8 @@ def main() (
     r.GET("/", requireSession, homePage)
     r.GET("/auth", authPage)
 
-    api := r.Group("/api")
-    api.OPTIONS("/*cors", def(*gin.Context c) -> (
+    auto api = r.Group("/api")
+    api.OPTIONS("/*cors", def(*gin.Context c) null -> (
         c.Status(200)
     ))
     api.GET("/auth", handleAuth)
@@ -67,14 +67,14 @@ def main() (
     api.GET("/shared/:owner/:id", handleSharedImage)
     api.GET("/shared/info/:owner/:id", handleSharedImageInfo)
 
-    images := api.Group("/images")
+    auto images = api.Group("/images")
     images.GET("/all", requireSession, handleAllImages)
     images.GET("/recent", requireSession, handleRecentImages)
     images.GET("/:year", requireSession, handleYearImages)
     images.GET("/:year/:month", requireSession, handleMonthImages)
     images.DELETE("delete", requireSession, handleDeleteImages)
 
-    image := api.Group("/image")
+    auto image = api.Group("/image")
     image.POST("", requireSession, handleUpload)
     image.POST("/upload", requireSession, handleUpload)
     image.DELETE("/:id", requireSession, handleDeleteImage)
@@ -85,7 +85,7 @@ def main() (
     image.POST("/:id/resize", requireSession, handleImageResize)
     image.GET("/preview/:id", requireSession, handlePreview)
 
-    albums := api.Group("/albums")
+    auto albums = api.Group("/albums")
     albums.GET("", requireSession, handleAlbums)
     albums.POST("", requireSession, handleAlbumCreate)
     albums.DELETE("/:name", requireSession, handleAlbumDelete)
@@ -93,7 +93,7 @@ def main() (
     albums.POST("/:name/add", requireSession, handleAlbumAdd)
     albums.POST("/:name/remove", requireSession, handleAlbumRemove)
 
-    bin := api.Group("/bin")
+    auto bin = api.Group("/bin")
     bin.GET("", requireSession, handleBinList)
     bin.POST("/restore/:id", requireSession, handleBinRestore)
     bin.DELETE("/:id", requireSession, handleBinDelete)

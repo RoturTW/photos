@@ -117,7 +117,7 @@ def handleYearImages(*gin.Context c) (
     for i n (
         object it = arr[i]
         int ts = it.timestamp.toNum()
-        t := time.UnixMilli(int64(ts))
+        auto t = time.UnixMilli(int64(ts))
         if t.Year() == year (
             out.append(it)
         )
@@ -141,7 +141,7 @@ def handleMonthImages(*gin.Context c) (
     for i n (
         object it = arr[i]
         int ts = it.timestamp.toNum()
-        t := time.UnixMilli(int64(ts))
+        auto t = time.UnixMilli(int64(ts))
         int tMonth = 0
         raw("tMonth = int(t.Month())")
         if t.Year() == year and tMonth == month (
@@ -185,7 +185,7 @@ def handleUpload(*gin.Context c) (
         return
     )
 
-    im := img.Open(tmpPath)
+    auto im = img.Open(tmpPath)
     if im == null (
         fs.Remove(tmpPath)
         c.JSON(400, { ok: false, error: "invalid image" })
@@ -202,7 +202,7 @@ def handleUpload(*gin.Context c) (
         w = round(w * ratio)
         h = round(h * ratio)
 
-        resized := img.Resize(im, w, h)
+        auto resized = img.Resize(im, w, h)
         im.Close()
 
         if resized == null (
@@ -286,6 +286,11 @@ def handleId(*gin.Context c) (
         c.JSON(401, { ok: false, error: "not authorized" })
         return
     )
+
+    c.Header("Content-Type", "image/jpeg")
+    c.Header("ETag", etag)
+    c.Header("Cache-Control", "private, must-revalidate")
+
     string id = c.Param("id")
     boolean json = false
     if id.endsWith(".json") (
@@ -324,8 +329,6 @@ def handleId(*gin.Context c) (
         return
     )
 
-    c.Header("ETag", etag)
-    c.Header("Cache-Control", "private, must-revalidate")
     c.File(path)
 )
 
@@ -347,14 +350,14 @@ def handleImageRotate(*gin.Context c) (
         return
     )
 
-    imgFile := img.Open(path)
+    auto imgFile = img.Open(path)
     if imgFile == null (
         c.JSON(400, { ok: false, error: "invalid image" })
         return
     )
     defer imgFile.Close()
 
-    rotated := img.Rotate(imgFile, angle)
+    auto rotated = img.Rotate(imgFile, angle)
     if rotated == null (
         c.JSON(500, { ok: false, error: "failed to rotate" })
         return
@@ -391,7 +394,7 @@ def handleImageCompress(*gin.Context c) (
     string id = c.Param("id")
 
     object body = c.Request.Body.toStr().JsonParse()
-    auto quality = round(body["quality"].toNum())
+    number quality = round(body["quality"].toNum())
     if quality < 10 or quality > 100 (
         quality = 85
     )
@@ -402,7 +405,7 @@ def handleImageCompress(*gin.Context c) (
         return
     )
 
-    imgFile := img.Open(path)
+    auto imgFile = img.Open(path)
     if imgFile == null (
         c.JSON(400, { ok: false, error: "invalid image" })
         return
@@ -413,10 +416,10 @@ def handleImageCompress(*gin.Context c) (
     auto w = round(size["w"])
     auto h = round(size["h"])
 
-    resized := img.Resize(imgFile, w, h)
+    auto resized = img.Resize(imgFile, w, h)
     defer resized.Close()
 
-    boolean wrote = img.SaveJPEG(resized, path, quality)
+    boolean wrote = img.SaveJPEG(resized, path, round(quality))
     if !wrote (
         c.JSON(500, { ok: false, error: "failed to save" })
         return
@@ -449,14 +452,14 @@ def handleImageResize(*gin.Context c) (
         return
     )
 
-    imgFile := img.Open(path)
+    auto imgFile = img.Open(path)
     if imgFile == null (
         c.JSON(400, { ok: false, error: "invalid image" })
         return
     )
     defer imgFile.Close()
 
-    resized := img.Resize(imgFile, w, h)
+    auto resized = img.Resize(imgFile, w, h)
     if resized == null (
         c.JSON(500, { ok: false, error: "failed to resize" })
         return
@@ -531,7 +534,7 @@ def handleSearch(*gin.Context c) (
         
         number ts = it.timestamp.toNum()
         if ts > 0 (
-            t := time.UnixMilli(int64(ts))
+            auto t = time.UnixMilli(int64(ts))
             int year = t.Year()
             int month = round(t.Month())
             
@@ -840,12 +843,12 @@ def handleDeleteImage(*gin.Context c) (
     )
     byte[] data = fs.ReadFileBytes(path)
     if data.len > 0 (
-        imgFile := img.DecodeBytes(data)
+        auto imgFile = img.DecodeBytes(data)
         if imgFile != null (
             object s = imgFile.Size()
             int w = round(s.w)
             int h = round(s.h)
-            resized := img.Resize(imgFile, w, h)
+            auto resized = img.Resize(imgFile, w, h)
             if resized == null (
                 c.JSON(500, { ok: false, error: "resize failed" })
                 return
@@ -923,7 +926,7 @@ def handleBinRestore(*gin.Context c) (
     string base = "db/" ++ userId
     string binPath = base ++ "/bin/" ++ id ++ ".jpg"
     string blobPath = base ++ "/blob/" ++ id ++ ".jpg"
-    imgFile := img.Open(binPath)
+    auto imgFile = img.Open(binPath)
     if imgFile == null (
         c.JSON(404, { ok: false, error: "not found" })
         return
@@ -932,7 +935,7 @@ def handleBinRestore(*gin.Context c) (
     object size = imgFile.Size()
     int w = round(size["w"])
     int h = round(size["h"])
-    resized := img.Resize(imgFile, w, h)
+    auto resized = img.Resize(imgFile, w, h)
     if resized == null (
         c.JSON(500, { ok: false, error: "failed to resize" })
         return
@@ -1206,9 +1209,6 @@ def handleDirectImage(*gin.Context c) (
                 )
             )
         )
-    )
-    
-    if !allowed (
         if c.Request.Method == "HEAD" (
             c.Status(404)
             return
@@ -1238,6 +1238,8 @@ def handleDirectImage(*gin.Context c) (
     )
 
     if c.Request.Method == "HEAD" (
+        c.Header("Content-Type", "image/jpeg")
+        c.Header("Cache-Control", "private, must-revalidate")
         c.Status(200)
         return
     )

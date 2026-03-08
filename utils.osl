@@ -2,7 +2,7 @@ def randomString(int length) string (
     string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
     string result = ""
     for i length (
-        result = result ++ chars[rand.Intn(chars.len) + 1].toStr()
+        result = result ++ chars[random(1, chars.len)].toStr()
     )
     return result
 )
@@ -12,7 +12,7 @@ def calculateFileHash(string path) string (
     raw("f, err := os.Open(path)")
     if err == null (
         raw("h := md5.New()")
-        raw("if _, err := io.Copy(h, f); err == nil { hash = hex.EncodeToString(h.Sum(nil)) }")
+        raw("if _, err := OSLio.Copy(h, f); err == nil { hash = hex.EncodeToString(h.Sum(nil)) }")
         raw("f.Close()")
     )
     return hash
@@ -40,11 +40,11 @@ def loadConfig() (
     object config = fs.ReadFile("./config.json").JsonParse().assert(object)
     authKey = config.authKey.toStr()
     useSubscriptions = config.useSubscriptions.toBool()
-    subscriptionSizes = config.subscriptionSizes
-    quotas = config.quotas
+    subscriptionSizes = config.subscriptionSizes.assert(object)
+    quotas = config.quotas.assert(object)
 
     if config.downscaleWhen != null (
-        downscaleWhen = config.downscaleWhen
+        downscaleWhen = config.downscaleWhen.assert(object)
     )
 )
 
@@ -652,7 +652,7 @@ def servePreview(*gin.Context c, string path, string id, string username) boolea
         return false
     )
     
-    im := img.Open(path)
+    auto im = img.Open(path)
     if im == null (
         c.JSON(400, { ok: false, error: "invalid image" })
         return false
@@ -674,7 +674,7 @@ def servePreview(*gin.Context c, string path, string id, string username) boolea
     int rw = round(w * ratio)
     int rh = round(h * ratio)
     
-    resized := img.ResizeFast(im, rw, rh)
+    auto resized = img.ResizeFast(im, rw, rh)
     if resized == null (
         c.JSON(500, { ok: false, error: "resize failed" })
         return false

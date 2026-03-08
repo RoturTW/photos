@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { qs, monthName, formatBytes } from './utils.js';
+import { qs, monthName } from './utils.js';
 
 export function groupByMonth(items) {
     const groups = [];
@@ -102,60 +102,38 @@ export function createPhotoCard(item) {
 }
 
 export function ensureImageObserver() {
-    if (state.imageObserver) {
-        state.imageObserver.disconnect();
-    }
-
-    const rootEl = document.querySelector(".content") || null;
-
-    state.imageObserver = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-            const card = entry.target;
-            const img = card.querySelector('img');
-            if (entry.isIntersecting) {
-                if (img.src !== card.dataset.src) {
-                    img.src = card.dataset.src;
-                }
-            } else {
-                if (img.src && !img.src.startsWith("data:")) {
-                    img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-                }
-            }
-        });
-    }, {
-        root: rootEl,
-        rootMargin: "1000px 0px"
-    });
-
+  if (state.imageObserver) {
+    state.imageObserver.disconnect();
     document.querySelectorAll('.photo-card').forEach(card => {
-        state.imageObserver.observe(card);
+      state.imageObserver.unobserve(card);
     });
+  }
+
+  const rootEl = document.querySelector(".content") || null;
+
+  state.imageObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      const card = entry.target;
+      const img = card.querySelector('img');
+      if (entry.isIntersecting) {
+        if (img.src !== card.dataset.src) {
+          img.src = card.dataset.src;
+        }
+      } else {
+        if (img.src && !img.src.startsWith("data:")) {
+          img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+        }
+      }
+    });
+  }, {
+    root: rootEl,
+    rootMargin: "1000px 0px"
+  });
+
+  document.querySelectorAll('.photo-card').forEach(card => {
+    state.imageObserver.observe(card);
+  });
 }
 
 export function renderStorage(stats) {
-    const grid = qs("grid");
-    if (!grid || !stats) return;
-
-    grid.innerHTML = "";
-    const totalUsed = stats.totalBytes + stats.binBytes;
-    const quota = stats.quota || 0;
-    const percent = quota > 0 ? Math.min((totalUsed / quota) * 100, 100) : 0;
-
-    const overview = document.createElement("div");
-    overview.className = "storage-overview";
-    overview.innerHTML = `
-    <div class="storage-card">
-      <div class="storage-header">
-        <i data-lucide="hard-drive" style="width: 32px; height: 32px;"></i>
-        <div class="storage-title">Storage Usage</div>
-      </div>
-      <div class="storage-total">${formatBytes(totalUsed)}</div>
-      <div class="storage-progress-container">
-        <div class="storage-progress-bar" style="width: ${percent}%"></div>
-      </div>
-      <div class="storage-progress-text">${percent.toFixed(1)}% of ${formatBytes(quota)} used</div>
-    </div>
-  `;
-    grid.appendChild(overview);
-    lucide.createIcons();
 }
