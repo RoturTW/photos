@@ -1209,6 +1209,9 @@ def handleDirectImage(*gin.Context c) (
                 )
             )
         )
+    )
+    
+    if !allowed (
         if c.Request.Method == "HEAD" (
             c.Status(404)
             return
