@@ -59,6 +59,9 @@ def getAble(string userId) object (
         )
     )
     string subscription = profile.subscription.toStr().toLower()
+    if subscription == "" (
+        subscription = "free"
+    )
     number quota = 0
     any maybeQuota = quotas[userId]
     if maybeQuota != null (
