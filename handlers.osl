@@ -174,12 +174,6 @@ def handleUpload(*gin.Context c) (
         return
     )
 
-    object stats = calculateStorageStats(userId)
-    if (stats.totalBytes.toNum() + stats.binBytes.toNum() + body.len) > able.storageQuota.toNum() (
-        c.JSON(403, { ok: false, error: "storage quota exceeded" })
-        return
-    )
-
     if !fs.WriteFile(tmpPath, body) (
         c.JSON(500, { ok: false, error: "failed to write upload" })
         return
@@ -217,7 +211,7 @@ def handleUpload(*gin.Context c) (
     string id = randomString(24)
     string outPath = base ++ "/" ++ id ++ ".jpg"
 
-    if !img.SaveJPEG(im, outPath, 90) (
+    if !img.SaveJPEG(im, outPath, 95) (
         im.Close()
         fs.Remove(tmpPath)
         c.JSON(500, { ok: false, error: "save failed" })
@@ -225,6 +219,17 @@ def handleUpload(*gin.Context c) (
     )
 
     im.Close()
+
+    object finalStat = fs.GetStat(outPath)
+    number finalSize = finalStat.size.toNum()
+
+    object stats = calculateStorageStats(userId)
+    if (stats.totalBytes.toNum() + stats.binBytes.toNum() + finalSize) > able.storageQuota.toNum() (
+        fs.Remove(outPath)
+        fs.Remove(tmpPath)
+        c.JSON(403, { ok: false, error: "storage quota exceeded" })
+        return
+    )
 
     number tsms = time.Now().UnixMilli()
     "*exif.Exif" x = null
